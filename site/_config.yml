@@ -1,0 +1,16 @@
+title: MijnDataAnalyse
+description: Power quality analysis app for A-Eberle PQBox — EN 50160 / IEC 61000
+baseurl: "/MijnDataAnalyse"
+url: "https://sjaajke.github.io"
+
+theme: minima
+
+author:
+  name: Jay Smeekes
+
+minima:
+  skin: classic
+
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
