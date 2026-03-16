@@ -26,20 +26,31 @@ jobs:
 
       - name: Code signing uitschakelen (CI)
         run: |
-          cd macos
-          sed -i '' \
-            's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = "";/g' \
-            Runner.xcodeproj/project.pbxproj
-          sed -i '' \
-            '/CODE_SIGN_STYLE/d' \
-            Runner.xcodeproj/project.pbxproj
+          python3 - <<'PYEOF'
+          import re, pathlib
+
+          path = pathlib.Path('macos/Runner.xcodeproj/project.pbxproj')
+          txt = path.read_text()
+
+          # Verwijder development team
+          txt = re.sub(r'DEVELOPMENT_TEAM = [A-Z0-9]*;', 'DEVELOPMENT_TEAM = "";', txt)
+          # Zet signing op Manual zodat Xcode niet auto-selecteert
+          txt = re.sub(r'CODE_SIGN_STYLE = Automatic;', 'CODE_SIGN_STYLE = Manual;', txt)
+          # Zet signing expliciet uit
+          txt = re.sub(r'CODE_SIGNING_REQUIRED = YES;', 'CODE_SIGNING_REQUIRED = NO;', txt)
+          txt = re.sub(r'CODE_SIGNING_ALLOWED = YES;', 'CODE_SIGNING_ALLOWED = NO;', txt)
+
+          path.write_text(txt)
+          print("pbxproj bijgewerkt")
+          PYEOF
 
       - name: Build macOS
-        env:
-          CODE_SIGN_IDENTITY: ""
-          CODE_SIGNING_REQUIRED: "NO"
-          CODE_SIGNING_ALLOWED: "NO"
-        run: flutter build macos --release
+        run: |
+          export CODE_SIGN_IDENTITY=""
+          export CODE_SIGNING_REQUIRED=NO
+          export CODE_SIGNING_ALLOWED=NO
+          export DEVELOPMENT_TEAM=""
+          flutter build macos --release
 
       - name: App inpakken als zip
         run: |
