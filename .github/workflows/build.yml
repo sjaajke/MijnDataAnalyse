@@ -123,6 +123,14 @@ jobs:
       - name: Android platform toevoegen
         run: flutter create --platforms=android .
 
+      - name: compileSdk verhogen naar 36
+        # flutter_plugin_android_lifecycle (transitieve dependency van
+        # file_picker) vereist compileSdk >= 36; Flutter's projecttemplate
+        # zet standaard nog compileSdk 34.
+        run: |
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' \
+            android/app/build.gradle.kts
+
       - name: Dependencies installeren
         run: flutter pub get
 
