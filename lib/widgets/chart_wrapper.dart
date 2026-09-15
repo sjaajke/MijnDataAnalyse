@@ -11,6 +11,9 @@ class ChartWrapper extends StatelessWidget {
   final double height;
   final List<LegendItem> legendItems;
 
+  /// Optioneel: widget naast de titel, bv. een schakelaar.
+  final Widget? trailing;
+
   const ChartWrapper({
     super.key,
     required this.title,
@@ -20,6 +23,7 @@ class ChartWrapper extends StatelessWidget {
     this.emptyMessage = 'No data available',
     this.height = 380,
     this.legendItems = const [],
+    this.trailing,
   });
 
   @override
@@ -33,7 +37,12 @@ class ChartWrapper extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: theme.textTheme.titleLarge),
+            Row(
+              children: [
+                Expanded(child: Text(title, style: theme.textTheme.titleLarge)),
+                ?trailing,
+              ],
+            ),
             const SizedBox(height: 8),
             if (legendItems.isNotEmpty)
               Wrap(
@@ -44,10 +53,7 @@ class ChartWrapper extends StatelessWidget {
                     .toList(),
               ),
             if (legendItems.isNotEmpty) const SizedBox(height: 12),
-            SizedBox(
-              height: height,
-              child: _buildBody(context),
-            ),
+            SizedBox(height: height, child: _buildBody(context)),
           ],
         ),
       ),
@@ -63,15 +69,12 @@ class ChartWrapper extends StatelessWidget {
         child: Text(
           emptyMessage,
           style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
       );
     }
-    return LineChart(
-      chartData,
-      duration: const Duration(milliseconds: 300),
-    );
+    return LineChart(chartData, duration: const Duration(milliseconds: 300));
   }
 }
 
@@ -93,10 +96,7 @@ class _LegendChip extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        Text(
-          item.label,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
+        Text(item.label, style: Theme.of(context).textTheme.bodySmall),
       ],
     );
   }
@@ -111,8 +111,9 @@ class LegendItem {
 
 /// Format a millisecond-epoch double to a short date+time label.
 String formatXAxisLabel(double msEpoch) {
-  final dt =
-      DateTime.fromMillisecondsSinceEpoch(msEpoch.toInt(), isUtc: true)
-          .toLocal();
+  final dt = DateTime.fromMillisecondsSinceEpoch(
+    msEpoch.toInt(),
+    isUtc: true,
+  ).toLocal();
   return DateFormat('MMM d HH:mm').format(dt);
 }

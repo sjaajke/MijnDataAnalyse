@@ -19,11 +19,22 @@ class ChartPoint {
 
 /// Eén grafiek in het rapport — bijv. één per geïmporteerd CSV-bestand
 /// (gemiddeld/RMS, min, max, max-200ms, max-sp, ...), elk met een lijn per
-/// fase (L1/L2/L3/N).
+/// fase (L1/L2/L3/N). Standaard is dit een stroomgrafiek (A) met een
+/// maximumdrempel; voor andere grootheden (bv. vermogen) kunnen [unit],
+/// [showRatedLine] en [neutralLabel] worden aangepast.
 class CapacityChartSection {
   final String title;
   final Map<String, List<ChartPoint>> series;
-  const CapacityChartSection({required this.title, required this.series});
+  final String unit;
+  final bool showRatedLine;
+  final String neutralLabel;
+  const CapacityChartSection({
+    required this.title,
+    required this.series,
+    this.unit = 'A',
+    this.showRatedLine = true,
+    this.neutralLabel = 'N',
+  });
 }
 
 /// Data needed to render one phase in the report.
@@ -176,6 +187,9 @@ Future<void> exportCapacityPdf({
     chartWidgets.add(_chartSectionWidget(
       title: renderedSections[i].title,
       series: renderedSections[i].series,
+      unit: renderedSections[i].unit,
+      showRatedLine: renderedSections[i].showRatedLine,
+      neutralLabel: renderedSections[i].neutralLabel,
       ratedA: ratedA,
       periodStart: periodStart,
       totalHours: totalHours,
@@ -650,13 +664,18 @@ pw.Widget _phaseBar(PhaseReportData p) {
   );
 }
 
-/// Titel + grafiek + legenda voor één [CapacityChartSection].
+/// Titel + grafiek + legenda voor één [CapacityChartSection]. Wanneer
+/// [showRatedLine] false is (bv. voor vermogen, dat geen ingestelde limiet
+/// kent) worden de max/70%/90%-referentielijnen weggelaten.
 pw.Widget _chartSectionWidget({
   required String title,
   required Map<String, List<ChartPoint>> series,
   required double ratedA,
   required DateTime periodStart,
   required double totalHours,
+  String unit = 'A',
+  bool showRatedLine = true,
+  String neutralLabel = 'N',
 }) {
   const phaseColors = <String, PdfColor>{
     'L1': PdfColors.red,
@@ -676,6 +695,8 @@ pw.Widget _chartSectionWidget({
         ratedA: ratedA,
         periodStart: periodStart,
         totalHours: totalHours,
+        unit: unit,
+        showRatedLine: showRatedLine,
       ),
       pw.SizedBox(height: 6),
       // Legenda
@@ -685,23 +706,26 @@ pw.Widget _chartSectionWidget({
               series[entry.key]!.isNotEmpty) ...[
             pw.Container(width: 12, height: 3, color: entry.value),
             pw.SizedBox(width: 4),
-            pw.Text(entry.key, style: const pw.TextStyle(fontSize: 8)),
+            pw.Text(entry.key == 'N' ? neutralLabel : entry.key,
+                style: const pw.TextStyle(fontSize: 8)),
             pw.SizedBox(width: 12),
           ],
-        pw.Container(width: 12, height: 3, color: PdfColors.grey400),
-        pw.SizedBox(width: 4),
-        pw.Text('Max (${ratedA.toStringAsFixed(0)} A)',
-            style: const pw.TextStyle(fontSize: 8)),
-        pw.SizedBox(width: 12),
-        pw.Container(width: 12, height: 2, color: PdfColors.green700),
-        pw.SizedBox(width: 4),
-        pw.Text('70% (${(ratedA * 0.70).toStringAsFixed(0)} A)',
-            style: const pw.TextStyle(fontSize: 8)),
-        pw.SizedBox(width: 12),
-        pw.Container(width: 12, height: 2, color: PdfColors.red),
-        pw.SizedBox(width: 4),
-        pw.Text('90% (${(ratedA * 0.90).toStringAsFixed(0)} A)',
-            style: const pw.TextStyle(fontSize: 8)),
+        if (showRatedLine) ...[
+          pw.Container(width: 12, height: 3, color: PdfColors.grey400),
+          pw.SizedBox(width: 4),
+          pw.Text('Max (${ratedA.toStringAsFixed(0)} $unit)',
+              style: const pw.TextStyle(fontSize: 8)),
+          pw.SizedBox(width: 12),
+          pw.Container(width: 12, height: 2, color: PdfColors.green700),
+          pw.SizedBox(width: 4),
+          pw.Text('70% (${(ratedA * 0.70).toStringAsFixed(0)} $unit)',
+              style: const pw.TextStyle(fontSize: 8)),
+          pw.SizedBox(width: 12),
+          pw.Container(width: 12, height: 2, color: PdfColors.red),
+          pw.SizedBox(width: 4),
+          pw.Text('90% (${(ratedA * 0.90).toStringAsFixed(0)} $unit)',
+              style: const pw.TextStyle(fontSize: 8)),
+        ],
       ]),
       pw.SizedBox(height: 16),
     ],
@@ -713,15 +737,18 @@ pw.Widget _buildLineChart({
   required double ratedA,
   required DateTime periodStart,
   required double totalHours,
+  String unit = 'A',
+  bool showRatedLine = true,
 }) {
   // Y-axis: 0 to max(ratedA, highest measured) with 5 ticks
-  double maxY = ratedA;
+  double maxY = showRatedLine ? ratedA : 0;
   for (final pts in series.values) {
     for (final p in pts) {
       if (p.y > maxY) maxY = p.y;
     }
   }
   maxY = (maxY * 1.05).ceilToDouble();
+  if (maxY <= 0) maxY = 1;
   final yStep = (maxY / 4).ceilToDouble();
   final yTicks = <double>[];
   for (var v = 0.0; v <= maxY + yStep * 0.1; v += yStep) {
@@ -759,43 +786,45 @@ pw.Widget _buildLineChart({
         ),
         yAxis: pw.FixedAxis<double>(
           yTicks,
-          format: (v) => '${v.toStringAsFixed(0)} A',
+          format: (v) => '${v.toStringAsFixed(0)} $unit',
           textStyle: const pw.TextStyle(fontSize: 7),
           divisions: true,
           divisionsColor: PdfColors.grey200,
         ),
       ),
       datasets: [
-        // 70%-grens (groen/oranje)
-        pw.LineDataSet<pw.PointChartValue>(
-          data: [
-            pw.PointChartValue(xTicks.first, ratedA * 0.70),
-            pw.PointChartValue(xTicks.last, ratedA * 0.70),
-          ],
-          color: PdfColors.green700,
-          lineWidth: 0.6,
-          drawPoints: false,
-        ),
-        // 90%-grens (oranje/rood)
-        pw.LineDataSet<pw.PointChartValue>(
-          data: [
-            pw.PointChartValue(xTicks.first, ratedA * 0.90),
-            pw.PointChartValue(xTicks.last, ratedA * 0.90),
-          ],
-          color: PdfColors.red,
-          lineWidth: 0.6,
-          drawPoints: false,
-        ),
-        // Maximale stroom
-        pw.LineDataSet<pw.PointChartValue>(
-          data: [
-            pw.PointChartValue(xTicks.first, ratedA),
-            pw.PointChartValue(xTicks.last, ratedA),
-          ],
-          color: PdfColors.grey400,
-          lineWidth: 0.8,
-          drawPoints: false,
-        ),
+        if (showRatedLine) ...[
+          // 70%-grens (groen/oranje)
+          pw.LineDataSet<pw.PointChartValue>(
+            data: [
+              pw.PointChartValue(xTicks.first, ratedA * 0.70),
+              pw.PointChartValue(xTicks.last, ratedA * 0.70),
+            ],
+            color: PdfColors.green700,
+            lineWidth: 0.6,
+            drawPoints: false,
+          ),
+          // 90%-grens (oranje/rood)
+          pw.LineDataSet<pw.PointChartValue>(
+            data: [
+              pw.PointChartValue(xTicks.first, ratedA * 0.90),
+              pw.PointChartValue(xTicks.last, ratedA * 0.90),
+            ],
+            color: PdfColors.red,
+            lineWidth: 0.6,
+            drawPoints: false,
+          ),
+          // Maximale stroom
+          pw.LineDataSet<pw.PointChartValue>(
+            data: [
+              pw.PointChartValue(xTicks.first, ratedA),
+              pw.PointChartValue(xTicks.last, ratedA),
+            ],
+            color: PdfColors.grey400,
+            lineWidth: 0.8,
+            drawPoints: false,
+          ),
+        ],
         // Fase-lijnen
         for (final entry in phaseColors.entries)
           if (series[entry.key] != null && series[entry.key]!.isNotEmpty)

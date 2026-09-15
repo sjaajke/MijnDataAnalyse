@@ -11,7 +11,8 @@ import '../models/pqf_record.dart';
 /// gevolgd door een datablok met kolommen `Datum;Tijd;<kolom>;...`, waarbij
 /// elke kolomnaam de fase en, indien van toepassing, de aggregatie bevat:
 /// `IL1_[A]` (gemiddelde/RMS), `IL1_min_[A]`, `IL1_max_[A]`,
-/// `IL1_max-200ms_[A]`, `IL1_max-sp_[A]`, `I_Neutral_[A]`, `UL1_max_[V]`, enz.
+/// `IL1_max-200ms_[A]`, `IL1_max-sp_[A]`, `I_Neutral_[A]`, `UL1_max_[V]`,
+/// `P_L1_[W]`, `P_total_max_[W]`, enz.
 /// Eén bestand kan meerdere kolommen (en dus aggregaties) tegelijk bevatten.
 ///
 /// Deze parser leest alle .csv-bestanden in de map, herkent de grootheden
@@ -39,6 +40,7 @@ class PqBoxCsvParser {
     final voltageMap = <DateTime, Map<String, double>>{};
     final currentMap = <DateTime, Map<String, double>>{};
     final freqMap = <DateTime, Map<String, double>>{};
+    final powerMap = <DateTime, Map<String, double>>{};
 
     String? deviceId;
     int filesUsed = 0;
@@ -93,6 +95,7 @@ class PqBoxCsvParser {
             _Quantity.current => currentMap,
             _Quantity.voltage => voltageMap,
             _Quantity.frequency => freqMap,
+            _Quantity.power => powerMap,
           };
           bucket.putIfAbsent(time, () => {})[entry.value.fieldKey] = value;
         }
@@ -107,11 +110,13 @@ class PqBoxCsvParser {
     final voltagePoints = _mapToPoints(voltageMap);
     final currentPoints = _mapToPoints(currentMap);
     final freqPoints = _mapToPoints(freqMap);
+    final powerPoints = _mapToPoints(powerMap);
 
     final allTimes = [
       ...voltagePoints.map((p) => p.time),
       ...currentPoints.map((p) => p.time),
       ...freqPoints.map((p) => p.time),
+      ...powerPoints.map((p) => p.time),
     ];
     final startTime = allTimes.isNotEmpty
         ? allTimes.reduce((a, b) => a.isBefore(b) ? a : b)
@@ -129,6 +134,7 @@ class PqBoxCsvParser {
       frequencyData10min: const [],
       frequencyData10s: freqPoints,
       events: const [],
+      activePowerData: powerPoints,
     );
   }
 
@@ -171,6 +177,19 @@ class PqBoxCsvParser {
       final prefix = isCurrent ? 'I' : 'V';
       final agg = _aggSuffix(neutral.group(2));
       return _ColumnMapping(quantity, '${prefix}_N$agg');
+    }
+
+    // Vermogen: "P_L1_[W]", "P_total_[W]", "P_L1_max_[W]", "P_total_min_[W]".
+    // De absolute-waarde kolommen "|P_L1|_[W]" e.d. matchen hier bewust niet
+    // (ze zouden dezelfde tijd/veldnaam overschrijven met de |.|-waarde).
+    final power = RegExp(r'^P_(L1|L2|L3|total)(?:_(.+))?$', caseSensitive: false)
+        .firstMatch(base);
+    if (power != null) {
+      final phase = power.group(1)!.toLowerCase() == 'total'
+          ? 'total'
+          : power.group(1)!.toUpperCase();
+      final agg = _aggSuffix(power.group(2));
+      return _ColumnMapping(_Quantity.power, 'P_$phase$agg');
     }
 
     return null;
@@ -217,7 +236,7 @@ class PqBoxCsvParser {
   }
 }
 
-enum _Quantity { current, voltage, frequency }
+enum _Quantity { current, voltage, frequency, power }
 
 class _ColumnMapping {
   final _Quantity quantity;
