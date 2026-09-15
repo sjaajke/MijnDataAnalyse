@@ -123,26 +123,19 @@ jobs:
       - name: Android platform toevoegen
         run: flutter create --platforms=android .
 
-      - name: compileSdk verhogen naar 36 voor alle modules
-        # flutter_plugin_android_lifecycle (transitieve dependency van
-        # file_picker) vereist compileSdk >= 36. Het bundelde
-        # file_picker-plugin-module zet zelf nog compileSdk 34, dus alleen
-        # de app zelf aanpassen is niet genoeg — forceer het voor alle
-        # Android-submodules (inclusief plugins) via een subprojects-hook.
-        run: |
-          cat >> android/build.gradle.kts <<'GRADLE_EOF'
-
-          subprojects {
-              plugins.withType<com.android.build.gradle.BasePlugin> {
-                  extensions.configure<com.android.build.gradle.BaseExtension> {
-                      compileSdkVersion(36)
-                  }
-              }
-          }
-          GRADLE_EOF
-
       - name: Dependencies installeren
         run: flutter pub get
+
+      - name: file_picker compileSdk patchen naar 36
+        # file_picker's eigen android/build.gradle zet zelf hardcoded
+        # "compileSdk 34" (onafhankelijk van Flutter's projectinstellingen),
+        # terwijl flutter_plugin_android_lifecycle (een dependency ervan)
+        # compileSdk >= 36 vereist. Patch dat rechtstreeks in de pub-cache.
+        run: |
+          find "$PUB_CACHE/hosted/pub.dev" -maxdepth 1 -iname 'file_picker-*' -type d \
+            | while read -r dir; do
+                sed -i 's/compileSdk 34/compileSdk 36/' "$dir/android/build.gradle"
+              done
 
       - name: Build Android APK (debug)
         run: flutter build apk --debug
