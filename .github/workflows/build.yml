@@ -133,9 +133,10 @@ jobs:
           cat >> android/build.gradle.kts <<'GRADLE_EOF'
 
           subprojects {
-              afterEvaluate {
-                  extensions.findByType<com.android.build.gradle.BaseExtension>()
-                      ?.compileSdkVersion(36)
+              plugins.withType<com.android.build.gradle.BasePlugin> {
+                  extensions.configure<com.android.build.gradle.BaseExtension> {
+                      compileSdkVersion(36)
+                  }
               }
           }
           GRADLE_EOF
