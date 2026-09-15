@@ -8,22 +8,19 @@ import '../providers/measurement_provider.dart';
 import '../widgets/chart_wrapper.dart';
 import '../widgets/time_range_selector.dart';
 
-enum _Metric { voltage, current }
+enum _Metric { voltage, current, cosPhi }
 
-// Color per phase — same as the individual screens
-const _phaseColors = <String, Color>{
-  'L1': Colors.red,
-  'L2': Colors.amber,
-  'L3': Colors.blue,
-  'N': Colors.grey,
-};
-
-// Dash pattern per slot (null = solid)
-const _slotDash = <List<int>?>[
-  null,      // Slot A: solid
-  [10, 5],   // Slot B: long dashes
-  [4, 4],    // Slot C: dots
+// Unique color per slot × phase combination. All lines are solid.
+// Rows = slot (A, B, C). Columns = phase (L1, L2, L3, N).
+const _slotPhaseColors = <List<Color>>[
+  // Slot A: warm tones
+  [Color(0xFFE53935), Color(0xFFFB8C00), Color(0xFFFFD600), Color(0xFF8D6E63)],
+  // Slot B: cool/blue tones
+  [Color(0xFF1E88E5), Color(0xFF00ACC1), Color(0xFF43A047), Color(0xFF546E7A)],
+  // Slot C: purple/pink tones
+  [Color(0xFF8E24AA), Color(0xFFE91E63), Color(0xFF9CCC65), Color(0xFF78909C)],
 ];
+const _phaseIndex = <String, int>{'L1': 0, 'L2': 1, 'L3': 2, 'N': 3};
 
 // One line in the chart
 class _LineSpec {
@@ -50,7 +47,7 @@ class ComparisonScreen extends StatefulWidget {
 }
 
 class _ComparisonScreenState extends State<ComparisonScreen> {
-  _Metric _metric = _Metric.voltage;
+  Set<_Metric> _metrics = {_Metric.voltage};
   String _phase = 'L1'; // 'L1','L2','L3','N', or 'Alle'
   double _filterMinMs = 0;
   double _filterMaxMs = double.infinity;
@@ -76,16 +73,24 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
     return true;
   }
 
+  List<dynamic> _metricDataFor(MeasurementSession s, _Metric metric) {
+    if (metric == _Metric.voltage) return s.voltageData;
+    if (metric == _Metric.current) return s.currentData;
+    return s.cosPhiData;
+  }
+
   void _resetFilter(List<MeasurementSession?> sessions) {
     double? tMin, tMax;
     for (final s in sessions) {
       if (s == null) continue;
-      final data = _metric == _Metric.voltage ? s.voltageData : s.currentData;
-      if (data.isEmpty) continue;
-      final dMin = data.first.time.millisecondsSinceEpoch.toDouble();
-      final dMax = data.last.time.millisecondsSinceEpoch.toDouble();
-      if (tMin == null || dMin < tMin) tMin = dMin;
-      if (tMax == null || dMax > tMax) tMax = dMax;
+      for (final metric in _Metric.values) {
+        final data = _metricDataFor(s, metric);
+        if (data.isEmpty) continue;
+        final dMin = data.first.time.millisecondsSinceEpoch.toDouble();
+        final dMax = data.last.time.millisecondsSinceEpoch.toDouble();
+        if (tMin == null || dMin < tMin) tMin = dMin;
+        if (tMax == null || dMax > tMax) tMax = dMax;
+      }
     }
     if (tMin != null && tMax != null) {
       setState(() {
@@ -104,23 +109,36 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
     }
   }
 
-  List<String> _phases() {
-    final base =
-        _metric == _Metric.current ? ['L1', 'L2', 'L3', 'N'] : ['L1', 'L2', 'L3'];
-    return [...base, 'Alle'];
+  /// Full data range across all loaded slots and all active metrics.
+  (double min, double max) _totalRange(List<MeasurementSession?> sessions) {
+    double tMin = double.infinity, tMax = double.negativeInfinity;
+    for (final s in sessions) {
+      if (s == null) continue;
+      for (final metric in _metrics) {
+        final data = _metricDataFor(s, metric);
+        if (data.isEmpty) continue;
+        final dMin = data.first.time.millisecondsSinceEpoch.toDouble();
+        final dMax = data.last.time.millisecondsSinceEpoch.toDouble();
+        if (dMin < tMin) tMin = dMin;
+        if (dMax > tMax) tMax = dMax;
+      }
+    }
+    return tMin.isFinite ? (tMin, tMax) : (0.0, 1.0);
   }
 
-  List<_LineSpec> _buildLines(List<MeasurementSession?> sessions) {
-    final dataKey = _metric == _Metric.voltage ? 'V_' : 'I_';
-    final phasesToShow = _phase == 'Alle'
-        ? _phases().where((p) => p != 'Alle').toList()
-        : [_phase];
+  List<_LineSpec> _buildLinesFor(
+      List<MeasurementSession?> sessions, _Metric metric) {
+    assert(metric != _Metric.cosPhi);
+    final dataKey = metric == _Metric.voltage ? 'V_' : 'I_';
+    final allPhases = ['L1', 'L2', 'L3', if (metric == _Metric.current) 'N'];
+    final phasesToShow =
+        _phase == 'Alle' ? allPhases : [_phase];
     final lines = <_LineSpec>[];
 
     for (int slot = 0; slot < 3; slot++) {
       final s = sessions[slot];
       if (s == null) continue;
-      final allData = _metric == _Metric.voltage ? s.voltageData : s.currentData;
+      final allData = metric == _Metric.voltage ? s.voltageData : s.currentData;
       if (allData.isEmpty) continue;
 
       final data = allData
@@ -147,8 +165,8 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
             slot: slot,
             phase: phase,
             spots: spots,
-            color: _phaseColors[phase] ?? Colors.white,
-            dashArray: _slotDash[slot],
+            color: _slotPhaseColors[slot][_phaseIndex[phase] ?? 0],
+            dashArray: null,
           ));
         }
       }
@@ -156,19 +174,47 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
     return lines;
   }
 
-  /// Full data range across all loaded slots (for the slider bounds).
-  (double min, double max) _totalRange(List<MeasurementSession?> sessions) {
-    double tMin = double.infinity, tMax = double.negativeInfinity;
-    for (final s in sessions) {
+  List<_LineSpec> _buildCosPhiLines(List<MeasurementSession?> sessions) {
+    // cos phi only has L1/L2/L3 — skip N
+    final phasesToShow = _phase == 'Alle' || _phase == 'N'
+        ? ['L1', 'L2', 'L3']
+        : [_phase];
+    final lines = <_LineSpec>[];
+
+    for (int slot = 0; slot < 3; slot++) {
+      final s = sessions[slot];
       if (s == null) continue;
-      final data = _metric == _Metric.voltage ? s.voltageData : s.currentData;
+      if (s.cosPhiData.isEmpty) continue;
+
+      final data = s.cosPhiData
+          .where((p) =>
+              p.time.millisecondsSinceEpoch >= _filterMinMs &&
+              p.time.millisecondsSinceEpoch <= _filterMaxMs)
+          .toList();
       if (data.isEmpty) continue;
-      final dMin = data.first.time.millisecondsSinceEpoch.toDouble();
-      final dMax = data.last.time.millisecondsSinceEpoch.toDouble();
-      if (dMin < tMin) tMin = dMin;
-      if (dMax > tMax) tMax = dMax;
+
+      final step = (data.length / 500).ceil().clamp(1, data.length);
+
+      for (final phase in phasesToShow) {
+        final spots = <FlSpot>[];
+        for (int j = 0; j < data.length; j += step) {
+          final p = data[j];
+          final x = p.time.millisecondsSinceEpoch.toDouble();
+          final y = phase == 'L1' ? p.l1 : phase == 'L2' ? p.l2 : p.l3;
+          spots.add(FlSpot(x, y));
+        }
+        if (spots.isNotEmpty) {
+          lines.add(_LineSpec(
+            slot: slot,
+            phase: phase,
+            spots: spots,
+            color: _slotPhaseColors[slot][_phaseIndex[phase] ?? 0],
+            dashArray: null,
+          ));
+        }
+      }
     }
-    return tMin.isFinite ? (tMin, tMax) : (0.0, 1.0);
+    return lines;
   }
 
   @override
@@ -177,61 +223,31 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
     final sessions = provider.sessions;
     final theme = Theme.of(context);
 
-    final phases = _phases();
-    if (!phases.contains(_phase)) _phase = 'L1';
-
-    final yLabel = _metric == _Metric.voltage ? 'Spanning (V)' : 'Stroom (A)';
-    final unit = _metric == _Metric.voltage ? 'V' : 'A';
-
     final (totalMinMs, totalMaxMs) = _totalRange(sessions);
     final fMin = _filterMinMs.clamp(totalMinMs, totalMaxMs);
     final fMax = _filterMaxMs.clamp(totalMinMs, totalMaxMs);
     final anySlotLoaded = sessions.any((s) => s != null);
+    final xInterval = (fMax - fMin) / 6;
 
-    final lines = _buildLines(sessions);
-    final hasData = lines.isNotEmpty;
+    // Build lines per active metric
+    final linesPerMetric = <_Metric, List<_LineSpec>>{
+      for (final m in _Metric.values)
+        if (_metrics.contains(m))
+          m: m == _Metric.cosPhi
+              ? _buildCosPhiLines(sessions)
+              : _buildLinesFor(sessions, m),
+    };
 
-    // Axis bounds (use filter range for X so the chart never collapses)
-    double minX = fMin, maxX = fMax;
-    double minY = double.infinity, maxY = double.negativeInfinity;
-    for (final line in lines) {
-      for (final s in line.spots) {
-        if (s.y < minY) minY = s.y;
-        if (s.y > maxY) maxY = s.y;
-      }
-    }
-    if (!hasData) {
-      minX = 0; maxX = 1; minY = 0; maxY = 1;
-    }
-    final yPad = ((maxY - minY) * 0.1).clamp(1.0, double.infinity);
-    final chartMinY = (minY - yPad).floorToDouble();
-    final chartMaxY = (maxY + yPad).ceilToDouble();
-
-    // Legend: phase colors; slot styles shown in title
-    final activePhases = _phase == 'Alle'
-        ? _phases().where((p) => p != 'Alle').toList()
-        : [_phase];
-    final legendItems = <LegendItem>[
-      for (final ph in activePhases)
-        if (lines.any((l) => l.phase == ph))
-          LegendItem(label: ph, color: _phaseColors[ph] ?? Colors.white),
-    ];
-
-    // Build slot style note only for slots that actually have data
-    final activeSlots = lines.map((l) => l.slot).toSet().toList()..sort();
-    final slotNote = activeSlots.length > 1
-        ? '  (${activeSlots.map((s) => '${_slotLabels[s]}=${["─", "╌╌", "···"][s]}').join("  ")})'
-        : '';
-
-    final chartTitle = _phase == 'Alle'
-        ? '$yLabel — alle fasen$slotNote'
-        : '$yLabel — fase $_phase$slotNote';
+    final anyData = linesPerMetric.values.any((l) => l.isNotEmpty);
+    final double minX = anyData ? fMin : 0;
+    final double maxX = anyData ? fMax : 1;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Slot cards
+          // ── Slot cards ──────────────────────────────────────────────────────
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: List.generate(3, (i) => Expanded(
@@ -250,32 +266,55 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Controls
-          Wrap(
-            alignment: WrapAlignment.center,
-            spacing: 16,
-            runSpacing: 8,
-            children: [
-              SegmentedButton<_Metric>(
-                segments: const [
-                  ButtonSegment(value: _Metric.voltage, label: Text('Spanning')),
-                  ButtonSegment(value: _Metric.current, label: Text('Stroom')),
+          // ── Metric toggles ──────────────────────────────────────────────────
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Row(
+                children: [
+                  Text('Toon:', style: theme.textTheme.labelMedium),
+                  const SizedBox(width: 12),
+                  _MetricChip(
+                    label: 'Spanning',
+                    active: _metrics.contains(_Metric.voltage),
+                    onTap: () => _toggleMetric(_Metric.voltage),
+                  ),
+                  const SizedBox(width: 8),
+                  _MetricChip(
+                    label: 'Stroom',
+                    active: _metrics.contains(_Metric.current),
+                    onTap: () => _toggleMetric(_Metric.current),
+                  ),
+                  const SizedBox(width: 8),
+                  _MetricChip(
+                    label: 'cos φ',
+                    active: _metrics.contains(_Metric.cosPhi),
+                    onTap: () => _toggleMetric(_Metric.cosPhi),
+                  ),
                 ],
-                selected: {_metric},
-                onSelectionChanged: (v) =>
-                    setState(() { _metric = v.first; _phase = 'L1'; }),
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
               ),
-              SegmentedButton<String>(
-                segments: phases
-                    .map((p) => ButtonSegment(value: p, label: Text(p)))
-                    .toList(),
-                selected: {_phase},
-                onSelectionChanged: (v) => setState(() => _phase = v.first),
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              ),
-            ],
+            ),
           ),
+          const SizedBox(height: 8),
+
+          // ── Phase selector ──────────────────────────────────────────────────
+          Center(
+            child: SegmentedButton<String>(
+              segments: const [
+                ButtonSegment(value: 'L1', label: Text('L1')),
+                ButtonSegment(value: 'L2', label: Text('L2')),
+                ButtonSegment(value: 'L3', label: Text('L3')),
+                ButtonSegment(value: 'N',  label: Text('N')),
+                ButtonSegment(value: 'Alle', label: Text('Alle')),
+              ],
+              selected: {_phase},
+              onSelectionChanged: (v) => setState(() => _phase = v.first),
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            ),
+          ),
+
+          // ── Time range selector ─────────────────────────────────────────────
           if (anySlotLoaded) ...[
             TimeRangeSelector(
               totalMinMs: totalMinMs,
@@ -294,7 +333,8 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
           ],
           const SizedBox(height: 8),
 
-          if (!hasData)
+          // ── Charts ──────────────────────────────────────────────────────────
+          if (!anySlotLoaded)
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(32),
@@ -306,19 +346,114 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
                 ),
               ),
             )
-          else
-            ChartWrapper(
-              title: chartTitle,
-              chartData: _buildChartData(
-                lines, minX, maxX, chartMinY, chartMaxY,
-                (maxX - minX) / 6,
-                yLabel, unit,
+          else if (_metrics.isEmpty)
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Center(
+                  child: Text(
+                    'Zet minimaal één metric aan.',
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
               ),
-              height: 420,
-              legendItems: legendItems,
-            ),
+            )
+          else
+            for (final metric in _Metric.values)
+              if (_metrics.contains(metric)) ...[
+                _buildMetricChart(
+                  sessions, metric,
+                  linesPerMetric[metric]!,
+                  minX, maxX, xInterval,
+                ),
+                const SizedBox(height: 12),
+              ],
         ],
       ),
+    );
+  }
+
+  void _toggleMetric(_Metric m) {
+    setState(() {
+      if (_metrics.contains(m)) {
+        _metrics = Set.of(_metrics)..remove(m);
+      } else {
+        _metrics = Set.of(_metrics)..add(m);
+      }
+    });
+  }
+
+  Widget _buildMetricChart(
+    List<MeasurementSession?> sessions,
+    _Metric metric,
+    List<_LineSpec> lines,
+    double minX, double maxX, double xInterval,
+  ) {
+    final isCos = metric == _Metric.cosPhi;
+    final yLabel = metric == _Metric.voltage
+        ? 'Spanning (V)'
+        : metric == _Metric.current
+            ? 'Stroom (A)'
+            : 'cos φ';
+    final unit = metric == _Metric.voltage ? 'V' : metric == _Metric.current ? 'A' : '';
+
+    // Y bounds
+    double chartMinY, chartMaxY;
+    if (isCos) {
+      chartMinY = -1.05;
+      chartMaxY = 1.05;
+    } else {
+      double minY = double.infinity, maxY = double.negativeInfinity;
+      for (final line in lines) {
+        for (final s in line.spots) {
+          if (s.y < minY) minY = s.y;
+          if (s.y > maxY) maxY = s.y;
+        }
+      }
+      if (lines.isEmpty) { minY = 0; maxY = 1; }
+      final yPad = ((maxY - minY) * 0.1).clamp(1.0, double.infinity);
+      chartMinY = (minY - yPad).floorToDouble();
+      chartMaxY = (maxY + yPad).ceilToDouble();
+    }
+
+    // Legend: one entry per slot+phase combo that actually has data
+    final legendItems = <LegendItem>[
+      for (final line in lines)
+        LegendItem(
+          label: '${_slotLabels[line.slot]}-${line.phase}',
+          color: line.color,
+        ),
+    ];
+
+    final phaseLabel = _phase == 'N' && isCos
+        ? 'niet beschikbaar voor N'
+        : _phase == 'Alle'
+            ? 'alle fasen'
+            : 'fase $_phase';
+    final title = '$yLabel — $phaseLabel';
+
+    if (lines.isEmpty) {
+      return Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Center(
+            child: Text('$yLabel — geen data',
+                style: const TextStyle(fontSize: 13, color: Colors.white54)),
+          ),
+        ),
+      );
+    }
+
+    return ChartWrapper(
+      title: title,
+      chartData: _buildChartData(
+        lines, minX, maxX, chartMinY, chartMaxY,
+        xInterval, yLabel, unit,
+        cosPhiLines: isCos,
+      ),
+      height: isCos ? 300 : 400,
+      legendItems: legendItems,
     );
   }
 
@@ -327,14 +462,51 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
     double minX, double maxX,
     double minY, double maxY,
     double xInterval,
-    String yLabel, String unit,
-  ) {
+    String yLabel, String unit, {
+    bool cosPhiLines = false,
+  }) {
+    final extraLines = cosPhiLines
+        ? ExtraLinesData(horizontalLines: [
+            HorizontalLine(
+              y: 0,
+              color: Colors.white24,
+              strokeWidth: 1,
+              dashArray: [4, 4],
+            ),
+            HorizontalLine(
+              y: 0.85,
+              color: Colors.green.withValues(alpha: 0.5),
+              strokeWidth: 1,
+              dashArray: [6, 4],
+              label: HorizontalLineLabel(
+                show: true,
+                labelResolver: (_) => '0.85',
+                style: const TextStyle(fontSize: 10, color: Colors.green),
+                alignment: Alignment.topRight,
+              ),
+            ),
+            HorizontalLine(
+              y: -0.85,
+              color: Colors.green.withValues(alpha: 0.5),
+              strokeWidth: 1,
+              dashArray: [6, 4],
+              label: HorizontalLineLabel(
+                show: true,
+                labelResolver: (_) => '-0.85',
+                style: const TextStyle(fontSize: 10, color: Colors.green),
+                alignment: Alignment.bottomRight,
+              ),
+            ),
+          ])
+        : null;
+
     return LineChartData(
       minX: minX,
       maxX: maxX,
       minY: minY,
       maxY: maxY,
       clipData: const FlClipData.all(),
+      extraLinesData: extraLines,
       gridData: FlGridData(
         show: true,
         getDrawingHorizontalLine: (_) =>
@@ -349,7 +521,10 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
             reservedSize: 52,
             getTitlesWidget: (v, meta) => SideTitleWidget(
               meta: meta,
-              child: Text(v.toStringAsFixed(1), style: const TextStyle(fontSize: 9)),
+              child: Text(
+                cosPhiLines ? v.toStringAsFixed(2) : v.toStringAsFixed(1),
+                style: const TextStyle(fontSize: 9),
+              ),
             ),
           ),
         ),
@@ -387,13 +562,46 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
           getTooltipItems: (spots) => spots.map((s) {
             final idx = s.barIndex.clamp(0, lines.length - 1);
             final line = lines[idx];
+            final valStr = unit.isEmpty
+                ? s.y.toStringAsFixed(3)
+                : '${s.y.toStringAsFixed(2)} $unit';
             return LineTooltipItem(
-              'Slot ${_slotLabels[line.slot]} ${line.phase}: '
-              '${s.y.toStringAsFixed(2)} $unit',
+              'Slot ${_slotLabels[line.slot]} ${line.phase}: $valStr',
               TextStyle(color: line.color, fontSize: 11),
             );
           }).toList(),
         ),
+      ),
+    );
+  }
+}
+
+// ── Metric toggle chip ─────────────────────────────────────────────────────────
+
+class _MetricChip extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _MetricChip({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return FilterChip(
+      label: Text(label),
+      selected: active,
+      onSelected: (_) => onTap(),
+      visualDensity: VisualDensity.compact,
+      selectedColor: cs.primaryContainer,
+      checkmarkColor: cs.onPrimaryContainer,
+      labelStyle: TextStyle(
+        fontSize: 13,
+        color: active ? cs.onPrimaryContainer : cs.onSurface,
       ),
     );
   }

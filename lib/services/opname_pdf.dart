@@ -7,8 +7,11 @@ import 'package:flutter/material.dart'
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:provider/provider.dart';
 
+import '../providers/bedrijfsgegevens_provider.dart';
 import 'capacity_pdf.dart' show ChartPoint;
+import 'pdf_branding.dart';
 
 // ── Data containers ──────────────────────────────────────────────────────────
 
@@ -58,6 +61,8 @@ Future<void> exportOpnamePdf({
   final durStr =
       '${dur.inDays}d ${dur.inHours % 24}h ${dur.inMinutes % 60}m';
   final totalHours = dur.inSeconds / 3600.0;
+  final logo =
+      loadCompanyLogo(context.read<BedrijfsgegevensProvider>().bedrijven);
 
   final pdf = pw.Document(
     theme: pw.ThemeData.withFont(
@@ -81,7 +86,7 @@ Future<void> exportOpnamePdf({
     build: (ctx) => [
       // ── Header ─────────────────────────────────────────────────────────────
       pw.Row(
-        crossAxisAlignment: pw.CrossAxisAlignment.end,
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Expanded(
             child: pw.Column(
@@ -97,9 +102,16 @@ Future<void> exportOpnamePdf({
               ],
             ),
           ),
-          pw.Text('Gegenereerd: ${fmtGen.format(now)}',
-              style: const pw.TextStyle(
-                  fontSize: 8, color: PdfColors.grey500)),
+          pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              if (logo != null) pw.Image(logo, width: 40, height: 40),
+              pw.SizedBox(height: 4),
+              pw.Text('Gegenereerd: ${fmtGen.format(now)}',
+                  style: const pw.TextStyle(
+                      fontSize: 8, color: PdfColors.grey500)),
+            ],
+          ),
         ],
       ),
       pw.Divider(thickness: 1.5, color: PdfColors.grey400),

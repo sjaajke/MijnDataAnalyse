@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'providers/bedrijfsgegevens_provider.dart';
 import 'providers/measurement_provider.dart';
+import 'providers/standaarden_provider.dart';
 import 'screens/home_screen.dart';
 
 void main() {
@@ -12,8 +14,12 @@ class PqAnalyseApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => MeasurementProvider(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => MeasurementProvider()),
+        ChangeNotifierProvider(create: (_) => StandaardenProvider()),
+        ChangeNotifierProvider(create: (_) => BedrijfsgegevensProvider()),
+      ],
       child: MaterialApp(
         title: 'PQ Analyse — A-Eberle PQBox',
         debugShowCheckedModeBanner: false,

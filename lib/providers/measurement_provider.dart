@@ -2,10 +2,16 @@ import 'package:flutter/foundation.dart';
 import '../models/measurement_data.dart';
 import '../services/fpqo_parser.dart';
 import '../services/measurement_loader.dart';
+import '../services/metrel_pwvx_parser.dart';
+import '../services/pqbox_csv_parser.dart';
+import '../services/qualistar_dvb_parser.dart';
 
 class MeasurementProvider extends ChangeNotifier {
   final MeasurementLoader _loader = MeasurementLoader();
   final FpqoParser _fpqoParser = FpqoParser();
+  final QualistarDvbParser _dvbParser = QualistarDvbParser();
+  final MetrelPwvxParser _pwvxParser = MetrelPwvxParser();
+  final PqBoxCsvParser _csvParser = PqBoxCsvParser();
 
   final List<MeasurementSession?> sessions = [null, null, null];
   final List<bool> slotsLoading = [false, false, false];
@@ -31,8 +37,35 @@ class MeasurementProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Laadt een kant-en-klare sessie (bijv. omgezet vanuit xlsx) in slot 0.
+  void loadXlsxSession(MeasurementSession session, String label) {
+    sessions[0] = session;
+    slotPaths[0] = label;
+    error = null;
+    notifyListeners();
+  }
+
   /// Loads a folder into slot 0 (backward-compatible).
   Future<void> loadFolder(String path) => loadSlot(0, path);
+
+  /// Loads a Chauvin Arnoux DataView .dvb file into slot 0.
+  Future<void> loadDvbFile(String path) async {
+    slotsLoading[0] = true;
+    error = null;
+    notifyListeners();
+
+    try {
+      sessions[0] = await _dvbParser.parseFile(path);
+      slotPaths[0] = path;
+    } catch (e) {
+      error = e.toString();
+      sessions[0] = null;
+      slotPaths[0] = null;
+    } finally {
+      slotsLoading[0] = false;
+      notifyListeners();
+    }
+  }
 
   /// Loads a single .fpqo file into slot 0.
   Future<void> loadFpqoFile(String path) async {
@@ -42,6 +75,44 @@ class MeasurementProvider extends ChangeNotifier {
 
     try {
       sessions[0] = await _fpqoParser.parseFile(path);
+      slotPaths[0] = path;
+    } catch (e) {
+      error = e.toString();
+      sessions[0] = null;
+      slotPaths[0] = null;
+    } finally {
+      slotsLoading[0] = false;
+      notifyListeners();
+    }
+  }
+
+  /// Loads a Metrel PowerView .pwvx file into slot 0.
+  Future<void> loadPwvxFile(String path) async {
+    slotsLoading[0] = true;
+    error = null;
+    notifyListeners();
+
+    try {
+      sessions[0] = await _pwvxParser.parseFile(path);
+      slotPaths[0] = path;
+    } catch (e) {
+      error = e.toString();
+      sessions[0] = null;
+      slotPaths[0] = null;
+    } finally {
+      slotsLoading[0] = false;
+      notifyListeners();
+    }
+  }
+
+  /// Loads a folder of PQ-Box 150 CSV export files into slot 0.
+  Future<void> loadCsvFolder(String path) async {
+    slotsLoading[0] = true;
+    error = null;
+    notifyListeners();
+
+    try {
+      sessions[0] = await _csvParser.parseFolder(path);
       slotPaths[0] = path;
     } catch (e) {
       error = e.toString();

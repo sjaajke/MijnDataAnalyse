@@ -15,9 +15,7 @@ class HarmonicScreen extends StatefulWidget {
 }
 
 class _HarmonicScreenState extends State<HarmonicScreen> {
-  // Index into harmonicCurrentData list for snapshot view
   int _snapshotIndex = 0;
-  // Show max order h2..h25 by default (EN50160 relevant range)
   int _maxOrder = 25;
 
   @override
@@ -34,12 +32,12 @@ class _HarmonicScreenState extends State<HarmonicScreen> {
       return const Center(child: Text('Geen harmonische stroomdata beschikbaar.'));
     }
 
-    // Clamp index
     if (_snapshotIndex >= data.length) _snapshotIndex = data.length - 1;
     final snap = data[_snapshotIndex];
 
-    // Fundamental currents (from currentData at same time, approximate)
     final fund = _findFundamental(session, snap.time);
+    final cosPhi = _findCosPhiAt(session, snap.time);
+    final pf = _findPFAt(session, snap.time);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -97,26 +95,36 @@ class _HarmonicScreenState extends State<HarmonicScreen> {
           ),
           const SizedBox(height: 8),
 
-          // THD summary cards
+          // THD + cos φ + PF summary cards
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _ThdCard(
-                  phase: 'L1',
-                  color: Colors.red,
-                  harmonics: snap.l1,
-                  fundamental: fund.$1),
+                phase: 'L1',
+                color: Colors.red,
+                harmonics: snap.l1,
+                fundamental: fund.$1,
+                cosPhi: cosPhi?.l1,
+                pf: pf.$1,
+              ),
               const SizedBox(width: 8),
               _ThdCard(
-                  phase: 'L2',
-                  color: Colors.amber,
-                  harmonics: snap.l2,
-                  fundamental: fund.$2),
+                phase: 'L2',
+                color: Colors.amber,
+                harmonics: snap.l2,
+                fundamental: fund.$2,
+                cosPhi: cosPhi?.l2,
+                pf: pf.$2,
+              ),
               const SizedBox(width: 8),
               _ThdCard(
-                  phase: 'L3',
-                  color: Colors.blue,
-                  harmonics: snap.l3,
-                  fundamental: fund.$3),
+                phase: 'L3',
+                color: Colors.blue,
+                harmonics: snap.l3,
+                fundamental: fund.$3,
+                cosPhi: cosPhi?.l3,
+                pf: pf.$3,
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -154,7 +162,7 @@ class _HarmonicScreenState extends State<HarmonicScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Time trend for h3 and h5 (most significant odd harmonics)
+          // Time trend h3, h5, h7
           _HarmonicTrendChart(
             data: data,
             orders: const [3, 5, 7],
@@ -162,21 +170,28 @@ class _HarmonicScreenState extends State<HarmonicScreen> {
             phaseValues: (p) => [p.l1[1], p.l1[3], p.l1[5]],
             colors: [Colors.orange, Colors.purple, Colors.teal],
           ),
+          const SizedBox(height: 12),
+
+          // cos φ + PF trend chart
+          if (session.cosPhiData.isNotEmpty ||
+              session.activePowerData.any((p) => p.values.containsKey('PF_L1')))
+            _CosPfTrendChart(
+              cosPhiData: session.cosPhiData,
+              pfData: session.activePowerData,
+            ),
         ],
       ),
     );
   }
 
-  /// Returns (I_L1, I_L2, I_L3) fundamentals, matching nearest timestamp.
   (double, double, double) _findFundamental(
       MeasurementSession session, DateTime t) {
     if (session.currentData.isEmpty) return (1, 1, 1);
     final pts = session.currentData;
-    // Find nearest point
     MeasurementPoint nearest = pts.first;
-    int minDiff = (pts.first.time.difference(t).inSeconds).abs();
+    int minDiff = pts.first.time.difference(t).inSeconds.abs();
     for (final p in pts) {
-      final d = (p.time.difference(t).inSeconds).abs();
+      final d = p.time.difference(t).inSeconds.abs();
       if (d < minDiff) {
         minDiff = d;
         nearest = p;
@@ -188,27 +203,67 @@ class _HarmonicScreenState extends State<HarmonicScreen> {
       nearest.values['I_L3'] ?? 1.0,
     );
   }
+
+  CosPhiPoint? _findCosPhiAt(MeasurementSession session, DateTime t) {
+    if (session.cosPhiData.isEmpty) return null;
+    final pts = session.cosPhiData;
+    CosPhiPoint nearest = pts.first;
+    int minDiff = pts.first.time.difference(t).inSeconds.abs();
+    for (final p in pts) {
+      final d = p.time.difference(t).inSeconds.abs();
+      if (d < minDiff) {
+        minDiff = d;
+        nearest = p;
+      }
+    }
+    return nearest;
+  }
+
+  (double?, double?, double?) _findPFAt(
+      MeasurementSession session, DateTime t) {
+    final pts = session.activePowerData
+        .where((p) => p.values.containsKey('PF_L1'))
+        .toList();
+    if (pts.isEmpty) return (null, null, null);
+    MeasurementPoint nearest = pts.first;
+    int minDiff = pts.first.time.difference(t).inSeconds.abs();
+    for (final p in pts) {
+      final d = p.time.difference(t).inSeconds.abs();
+      if (d < minDiff) {
+        minDiff = d;
+        nearest = p;
+      }
+    }
+    return (
+      nearest.values['PF_L1'],
+      nearest.values['PF_L2'],
+      nearest.values['PF_L3'],
+    );
+  }
 }
 
-// ── THD summary card ─────────────────────────────────────────────────────────
+// ── THD + cos φ + PF summary card ────────────────────────────────────────────
 
 class _ThdCard extends StatelessWidget {
   final String phase;
   final Color color;
   final List<double> harmonics;
   final double fundamental;
+  final double? cosPhi;
+  final double? pf;
 
   const _ThdCard({
     required this.phase,
     required this.color,
     required this.harmonics,
     required this.fundamental,
+    this.cosPhi,
+    this.pf,
   });
 
   double get thd {
     if (fundamental <= 0) return 0;
-    final sumSq =
-        harmonics.fold<double>(0, (s, v) => s + v * v);
+    final sumSq = harmonics.fold<double>(0, (s, v) => s + v * v);
     return 100.0 * (sumSq > 0 ? (sumSq / (fundamental * fundamental)) : 0);
   }
 
@@ -216,7 +271,6 @@ class _ThdCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final thdVal = thd;
-    // EN50160: I_THD limit is not specified, but typically < 8% is good
     final isGood = thdVal < 8.0;
 
     return Expanded(
@@ -232,8 +286,8 @@ class _ThdCard extends StatelessWidget {
                   Container(
                     width: 12,
                     height: 12,
-                    decoration: BoxDecoration(
-                        color: color, shape: BoxShape.circle),
+                    decoration:
+                        BoxDecoration(color: color, shape: BoxShape.circle),
                   ),
                   const SizedBox(width: 6),
                   Text(phase,
@@ -262,12 +316,248 @@ class _ThdCard extends StatelessWidget {
                 'h3: ${harmonics.length > 1 ? harmonics[1].toStringAsFixed(3) : '-'} A',
                 style: theme.textTheme.bodySmall,
               ),
+              if (cosPhi != null) ...[
+                const Divider(height: 10, thickness: 0.4),
+                Text(
+                  'cos φ: ${cosPhi!.toStringAsFixed(3)}',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ],
+              if (pf != null)
+                Text(
+                  'PF: ${pf!.toStringAsFixed(3)}',
+                  style: theme.textTheme.bodySmall,
+                ),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+// ── cos φ en PF tijdverloopgrafiek ───────────────────────────────────────────
+
+class _CosPfTrendChart extends StatelessWidget {
+  final List<CosPhiPoint> cosPhiData;
+  final List<MeasurementPoint> pfData;
+
+  const _CosPfTrendChart({
+    required this.cosPhiData,
+    required this.pfData,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    // cos φ lines (solid) — one per phase
+    final cosLines = <LineChartBarData>[];
+    if (cosPhiData.isNotEmpty) {
+      final phaseColors = [Colors.red, Colors.amber, Colors.blue];
+      final getters = [
+        (CosPhiPoint p) => p.l1,
+        (CosPhiPoint p) => p.l2,
+        (CosPhiPoint p) => p.l3,
+      ];
+      for (int i = 0; i < 3; i++) {
+        cosLines.add(LineChartBarData(
+          spots: cosPhiData
+              .map((p) => FlSpot(
+                    p.time.millisecondsSinceEpoch.toDouble(),
+                    getters[i](p),
+                  ))
+              .toList(),
+          color: phaseColors[i],
+          barWidth: 1.5,
+          dotData: const FlDotData(show: false),
+          isCurved: true,
+          curveSmoothness: 0.15,
+        ));
+      }
+    }
+
+    // PF lines (dashed) — one per phase
+    final pfLines = <LineChartBarData>[];
+    final pfPts = pfData.where((p) => p.values.containsKey('PF_L1')).toList();
+    if (pfPts.isNotEmpty) {
+      final phaseColors = [Colors.red, Colors.amber, Colors.blue];
+      final keys = ['PF_L1', 'PF_L2', 'PF_L3'];
+      for (int i = 0; i < 3; i++) {
+        pfLines.add(LineChartBarData(
+          spots: pfPts
+              .where((p) => p.values.containsKey(keys[i]))
+              .map((p) => FlSpot(
+                    p.time.millisecondsSinceEpoch.toDouble(),
+                    p.values[keys[i]]!.abs(),
+                  ))
+              .toList(),
+          color: phaseColors[i],
+          barWidth: 1.5,
+          dotData: const FlDotData(show: false),
+          isCurved: true,
+          curveSmoothness: 0.15,
+          dashArray: [6, 4],
+        ));
+      }
+    }
+
+    final allLines = [...cosLines, ...pfLines];
+    if (allLines.isEmpty) return const SizedBox.shrink();
+
+    // x-interval for axis labels
+    double xInterval = 1;
+    if (cosPhiData.length >= 2) {
+      final span = cosPhiData.last.time.millisecondsSinceEpoch -
+          cosPhiData.first.time.millisecondsSinceEpoch;
+      xInterval = (span / 6).clamp(1, double.infinity).toDouble();
+    } else if (pfPts.length >= 2) {
+      final span = pfPts.last.time.millisecondsSinceEpoch -
+          pfPts.first.time.millisecondsSinceEpoch;
+      xInterval = (span / 6).clamp(1, double.infinity).toDouble();
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 24, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('cos φ en Vermogensfactor tijdverloop',
+                style: theme.textTheme.titleMedium),
+            const SizedBox(height: 8),
+            // Legend
+            Row(
+              children: [
+                _lineLegend(Colors.red, 'L1'),
+                const SizedBox(width: 16),
+                _lineLegend(Colors.amber, 'L2'),
+                const SizedBox(width: 16),
+                _lineLegend(Colors.blue, 'L3'),
+                const SizedBox(width: 24),
+                _lineLegend(Colors.grey, 'cos φ (—)', dashed: false),
+                const SizedBox(width: 16),
+                _lineLegend(Colors.grey, 'PF (- -)', dashed: true),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 240,
+              child: LineChart(
+                LineChartData(
+                  lineBarsData: allLines,
+                  minY: 0,
+                  maxY: 1.05,
+                  gridData: const FlGridData(show: true),
+                  borderData: FlBorderData(show: false),
+                  titlesData: FlTitlesData(
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 42,
+                        interval: 0.2,
+                        getTitlesWidget: (v, meta) => SideTitleWidget(
+                          meta: meta,
+                          child: Text(v.toStringAsFixed(1),
+                              style: const TextStyle(fontSize: 9)),
+                        ),
+                      ),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 32,
+                        interval: xInterval,
+                        getTitlesWidget: (v, meta) => SideTitleWidget(
+                          meta: meta,
+                          child: Text(
+                            DateFormat('d/M\nHH:mm').format(
+                                DateTime.fromMillisecondsSinceEpoch(v.toInt(),
+                                        isUtc: true)
+                                    .toLocal()),
+                            style: const TextStyle(fontSize: 9),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    ),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                  ),
+                  lineTouchData: LineTouchData(
+                    touchTooltipData: LineTouchTooltipData(
+                      getTooltipColor: (_) => Colors.black87,
+                      getTooltipItems: (spots) {
+                        final nCos = cosLines.length;
+                        return spots.map((s) {
+                          final isCos = s.barIndex < nCos;
+                          final phaseIdx = s.barIndex % 3;
+                          final phase = ['L1', 'L2', 'L3'][phaseIdx];
+                          final label = isCos ? 'cos φ $phase' : 'PF $phase';
+                          return LineTooltipItem(
+                            '$label: ${s.y.toStringAsFixed(3)}',
+                            TextStyle(
+                                color:
+                                    [Colors.red, Colors.amber, Colors.blue][phaseIdx],
+                                fontSize: 11),
+                          );
+                        }).toList();
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _lineLegend(Color color, String label, {bool dashed = false}) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        CustomPaint(
+          size: const Size(20, 3),
+          painter: _LinePainter(color: color, dashed: dashed),
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 11)),
+      ],
+    );
+  }
+}
+
+class _LinePainter extends CustomPainter {
+  final Color color;
+  final bool dashed;
+  const _LinePainter({required this.color, required this.dashed});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2;
+    if (!dashed) {
+      canvas.drawLine(Offset(0, size.height / 2),
+          Offset(size.width, size.height / 2), paint);
+    } else {
+      const dashLen = 4.0;
+      const gapLen = 3.0;
+      double x = 0;
+      while (x < size.width) {
+        canvas.drawLine(Offset(x, size.height / 2),
+            Offset((x + dashLen).clamp(0, size.width), size.height / 2), paint);
+        x += dashLen + gapLen;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LinePainter old) => old.color != color || old.dashed != dashed;
 }
 
 // ── Grouped bar chart ────────────────────────────────────────────────────────
@@ -289,17 +579,26 @@ class _HarmonicBarChart extends StatelessWidget {
     final count = (maxOrder - 2 + 1).clamp(1, snap.l1.length);
 
     final groups = List.generate(count, (i) {
-      final h = i + 2; // h2..h(maxOrder)
+      final h = i + 2;
       return BarChartGroupData(
         x: h,
         groupVertically: false,
         barRods: [
           BarChartRodData(
-              toY: snap.l1[i], color: Colors.red, width: 5, borderRadius: BorderRadius.zero),
+              toY: snap.l1[i],
+              color: Colors.red,
+              width: 5,
+              borderRadius: BorderRadius.zero),
           BarChartRodData(
-              toY: snap.l2[i], color: Colors.amber, width: 5, borderRadius: BorderRadius.zero),
+              toY: snap.l2[i],
+              color: Colors.amber,
+              width: 5,
+              borderRadius: BorderRadius.zero),
           BarChartRodData(
-              toY: snap.l3[i], color: Colors.blue, width: 5, borderRadius: BorderRadius.zero),
+              toY: snap.l3[i],
+              color: Colors.blue,
+              width: 5,
+              borderRadius: BorderRadius.zero),
         ],
         barsSpace: 1,
       );
@@ -317,7 +616,6 @@ class _HarmonicBarChart extends StatelessWidget {
           children: [
             Text(title, style: theme.textTheme.titleMedium),
             const SizedBox(height: 8),
-            // Legend
             Row(
               children: [
                 _barLegend(Colors.red, 'L1'),
@@ -359,7 +657,6 @@ class _HarmonicBarChart extends StatelessWidget {
                         showTitles: true,
                         getTitlesWidget: (v, meta) {
                           final h = v.toInt();
-                          // Show label for every odd harmonic + h2
                           if (h == 2 || h % 2 != 0) {
                             return SideTitleWidget(
                               meta: meta,
@@ -465,10 +762,7 @@ class _HarmonicTrendChart extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                          width: 20,
-                          height: 3,
-                          color: colors[i]),
+                      Container(width: 20, height: 3, color: colors[i]),
                       const SizedBox(width: 4),
                       Text('h${orders[i]}',
                           style: const TextStyle(fontSize: 12)),
@@ -510,9 +804,8 @@ class _HarmonicTrendChart extends StatelessWidget {
                           meta: meta,
                           child: Text(
                             DateFormat('d/M\nHH:mm').format(
-                                DateTime.fromMillisecondsSinceEpoch(
-                                    v.toInt(),
-                                    isUtc: true)
+                                DateTime.fromMillisecondsSinceEpoch(v.toInt(),
+                                        isUtc: true)
                                     .toLocal()),
                             style: const TextStyle(fontSize: 9),
                             textAlign: TextAlign.center,

@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/measurement_provider.dart';
 import 'comparison_screen.dart';
@@ -15,6 +16,9 @@ import 'opname_screen.dart';
 import 'overview_screen.dart';
 import 'power_screen.dart';
 import 'transients_screen.dart';
+import 'systeemcode_screen.dart';
+import 'meter_excel_screen.dart';
+import 'standaarden_screen.dart';
 import 'voltage_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -93,6 +97,21 @@ class _HomeScreenState extends State<HomeScreen> {
       selectedIcon: Icon(Icons.verified),
       label: Text('EN 50160'),
     ),
+    NavigationRailDestination(
+      icon: Icon(Icons.auto_awesome_outlined),
+      selectedIcon: Icon(Icons.auto_awesome),
+      label: Text('Systeemcode'),
+    ),
+    NavigationRailDestination(
+      icon: Icon(Icons.table_chart_outlined),
+      selectedIcon: Icon(Icons.table_chart),
+      label: Text('Energiemeter'),
+    ),
+    NavigationRailDestination(
+      icon: Icon(Icons.rule_folder_outlined),
+      selectedIcon: Icon(Icons.rule_folder),
+      label: Text('Standaarden'),
+    ),
   ];
 
   final List<Widget> _screens = const [
@@ -109,6 +128,9 @@ class _HomeScreenState extends State<HomeScreen> {
     TransientsScreen(),
     PowerScreen(),
     En50160Screen(),
+    SysteemcodeScreen(),
+    MeterExcelScreen(),
+    StandaardenScreen(),
   ];
 
   Future<void> _pickFolder(BuildContext context) async {
@@ -129,6 +151,39 @@ class _HomeScreenState extends State<HomeScreen> {
     final path = result?.files.single.path;
     if (path != null && context.mounted) {
       await context.read<MeasurementProvider>().loadFpqoFile(path);
+    }
+  }
+
+  Future<void> _pickPwvxFile(BuildContext context) async {
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Open Metrel PowerView bestand',
+      type: FileType.custom,
+      allowedExtensions: ['pwvx'],
+    );
+    final path = result?.files.single.path;
+    if (path != null && context.mounted) {
+      await context.read<MeasurementProvider>().loadPwvxFile(path);
+    }
+  }
+
+  Future<void> _pickCsvFolder(BuildContext context) async {
+    final path = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Select PQ-Box 150 CSV Folder',
+    );
+    if (path != null && context.mounted) {
+      await context.read<MeasurementProvider>().loadCsvFolder(path);
+    }
+  }
+
+  Future<void> _pickDvbFile(BuildContext context) async {
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: 'Open Chauvin Arnoux DataView bestand',
+      type: FileType.custom,
+      allowedExtensions: ['dvb'],
+    );
+    final path = result?.files.single.path;
+    if (path != null && context.mounted) {
+      await context.read<MeasurementProvider>().loadDvbFile(path);
     }
   }
 
@@ -169,31 +224,88 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        FilledButton.tonal(
-                          onPressed: provider.isLoading
-                              ? null
-                              : () => _pickFolder(context),
-                          child: const Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.folder_open, size: 20),
-                              SizedBox(height: 2),
-                              Text('Open PQF', style: TextStyle(fontSize: 11)),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        FilledButton.tonal(
-                          onPressed: provider.isLoading
-                              ? null
-                              : () => _pickFpqoFile(context),
-                          child: const Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.file_open, size: 20),
-                              SizedBox(height: 2),
-                              Text('Open FPQO', style: TextStyle(fontSize: 11)),
-                            ],
+                        PopupMenuButton<String>(
+                          enabled: !provider.isLoading,
+                          onSelected: (value) {
+                            if (value == 'pqf') _pickFolder(context);
+                            if (value == 'csv') _pickCsvFolder(context);
+                            if (value == 'fpqo') _pickFpqoFile(context);
+                            if (value == 'dvb') _pickDvbFile(context);
+                            if (value == 'pwvx') _pickPwvxFile(context);
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              value: 'pqf',
+                              child: ListTile(
+                                leading: Icon(Icons.folder_open),
+                                title: Text('PQF map (A-Eberle)'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'csv',
+                              child: ListTile(
+                                leading: Icon(Icons.folder_open),
+                                title: Text('CSV map (PQ-Box 150)'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'fpqo',
+                              child: ListTile(
+                                leading: Icon(Icons.file_open),
+                                title: Text('FPQO bestand (Fluke)'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'dvb',
+                              child: ListTile(
+                                leading: Icon(Icons.analytics_outlined),
+                                title: Text('DVB bestand (Chauvin Arnoux)'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'pwvx',
+                              child: ListTile(
+                                leading: Icon(Icons.electrical_services),
+                                title: Text('PWVX bestand (Metrel)'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                          ],
+                          child: Builder(
+                            builder: (context) {
+                              final colors = Theme.of(context).colorScheme;
+                              final isEnabled = !provider.isLoading;
+                              return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: isEnabled
+                                      ? colors.secondaryContainer
+                                      : colors.onSurface.withValues(alpha: 0.12),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.upload_file,
+                                        size: 20,
+                                        color: isEnabled
+                                            ? colors.onSecondaryContainer
+                                            : colors.onSurface.withValues(alpha: 0.38)),
+                                    const SizedBox(height: 2),
+                                    Text('Importeer',
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: isEnabled
+                                                ? colors.onSecondaryContainer
+                                                : colors.onSurface.withValues(alpha: 0.38))),
+                                  ],
+                                ),
+                              );
+                            },
                           ),
                         ),
                         const SizedBox(height: 8),
@@ -272,11 +384,19 @@ class _ErrorBanner extends StatelessWidget {
                 color: Theme.of(context).colorScheme.onErrorContainer),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
+              child: SelectableText(
                 message,
                 style: TextStyle(
                     color: Theme.of(context).colorScheme.onErrorContainer),
               ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.copy_outlined),
+              tooltip: 'Kopiëren',
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: message));
+              },
+              color: Theme.of(context).colorScheme.onErrorContainer,
             ),
             IconButton(
               icon: const Icon(Icons.close),

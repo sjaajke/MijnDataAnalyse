@@ -253,14 +253,13 @@ class _VoltageScreenState extends State<VoltageScreen> {
       ),
     );
 
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
                 if (hasMaxMin) ...[
                   SegmentedButton<_VoltageView>(
                     segments: const [
@@ -333,7 +332,6 @@ class _VoltageScreenState extends State<VoltageScreen> {
             ],
           ),
         ],
-      ),
     );
   }
 }

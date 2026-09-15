@@ -40,8 +40,7 @@ class _PowerScreenState extends State<PowerScreen> {
 
     if (session == null || session.activePowerData.isEmpty) {
       return const Center(
-        child: Text(
-            'Geen vermogensdata beschikbaar.\nLaad een Fluke FPQO bestand.'),
+        child: Text('Geen vermogensdata beschikbaar.'),
       );
     }
 

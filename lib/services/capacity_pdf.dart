@@ -5,12 +5,25 @@ import 'package:flutter/material.dart' show BuildContext, ScaffoldMessenger, Sna
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:provider/provider.dart';
+
+import '../providers/bedrijfsgegevens_provider.dart';
+import 'pdf_branding.dart';
 
 /// Eén datapunt voor de grafiek: x in uren na start, y in ampère.
 class ChartPoint {
   final double x;
   final double y;
   const ChartPoint(this.x, this.y);
+}
+
+/// Eén grafiek in het rapport — bijv. één per geïmporteerd CSV-bestand
+/// (gemiddeld/RMS, min, max, max-200ms, max-sp, ...), elk met een lijn per
+/// fase (L1/L2/L3/N).
+class CapacityChartSection {
+  final String title;
+  final Map<String, List<ChartPoint>> series;
+  const CapacityChartSection({required this.title, required this.series});
 }
 
 /// Data needed to render one phase in the report.
@@ -39,6 +52,83 @@ class PhaseReportData {
       peakPct >= 90 ? 'Kritiek' : peakPct >= 70 ? 'Let op' : 'OK';
 }
 
+/// A single Titel/Tekst/Afbeelding note block in the report.
+class CapacityNote {
+  final String? title;
+  final String? bodyText;
+  final File? image;
+
+  const CapacityNote({this.title, this.bodyText, this.image});
+}
+
+/// Algemene gegevens: opdrachtgever, inspectieadres en inspectiebedrijf.
+class GeneralInfo {
+  final String clientCompany;
+  final String clientAddress;
+  final String clientPostalCity;
+  final String clientContact;
+  final String clientPhone;
+  final String clientEmail;
+
+  final String inspectionName;
+  final String inspectionAddress;
+  final String inspectionPostalCity;
+  final String inspectionContact;
+  final String inspectionPhone;
+  final String inspectionEmail;
+
+  final String inspectorCompany;
+  final String inspectorAddress;
+  final String inspectorPostalCity;
+  final String inspectorPhone;
+  final String inspectorEmail;
+  final String inspectorContact;
+  final String inspectorResponsible;
+
+  const GeneralInfo({
+    this.clientCompany = '',
+    this.clientAddress = '',
+    this.clientPostalCity = '',
+    this.clientContact = '',
+    this.clientPhone = '',
+    this.clientEmail = '',
+    this.inspectionName = '',
+    this.inspectionAddress = '',
+    this.inspectionPostalCity = '',
+    this.inspectionContact = '',
+    this.inspectionPhone = '',
+    this.inspectionEmail = '',
+    this.inspectorCompany = '',
+    this.inspectorAddress = '',
+    this.inspectorPostalCity = '',
+    this.inspectorPhone = '',
+    this.inspectorEmail = '',
+    this.inspectorContact = '',
+    this.inspectorResponsible = '',
+  });
+
+  bool get isEmpty =>
+      clientCompany.trim().isEmpty &&
+      clientAddress.trim().isEmpty &&
+      clientPostalCity.trim().isEmpty &&
+      clientContact.trim().isEmpty &&
+      clientPhone.trim().isEmpty &&
+      clientEmail.trim().isEmpty &&
+      inspectionName.trim().isEmpty &&
+      inspectionAddress.trim().isEmpty &&
+      inspectionPostalCity.trim().isEmpty &&
+      inspectionContact.trim().isEmpty &&
+      inspectionPhone.trim().isEmpty &&
+      inspectionEmail.trim().isEmpty &&
+      inspectorCompany.trim().isEmpty &&
+      inspectorAddress.trim().isEmpty &&
+      inspectorPostalCity.trim().isEmpty &&
+      inspectorPhone.trim().isEmpty &&
+      inspectorEmail.trim().isEmpty &&
+      inspectorContact.trim().isEmpty &&
+      inspectorResponsible.trim().isEmpty;
+}
+
 /// Generates and saves a PDF capacity report.
 Future<void> exportCapacityPdf({
   required BuildContext context,
@@ -47,11 +137,50 @@ Future<void> exportCapacityPdf({
   required DateTime periodStart,
   required DateTime periodEnd,
   required List<PhaseReportData> phases,
-  Map<String, List<ChartPoint>>? chartSeries,
+  List<CapacityChartSection>? chartSections,
+  List<CapacityNote>? notes,
+  GeneralInfo? generalInfo,
+  String? introText,
 }) async {
   final now = DateTime.now();
   final fmt = DateFormat('d MMM yyyy HH:mm');
   final fmtPeriod = DateFormat('d/M/yyyy HH:mm');
+  final logo =
+      loadCompanyLogo(context.read<BedrijfsgegevensProvider>().bedrijven);
+  final noteImageBytes = [
+    for (final n in notes ?? const <CapacityNote>[])
+      n.image != null ? await n.image!.readAsBytes() : null,
+  ];
+  bool hasNoteContent(int i) {
+    final n = notes![i];
+    return (n.title != null && n.title!.trim().isNotEmpty) ||
+        (n.bodyText != null && n.bodyText!.trim().isNotEmpty) ||
+        noteImageBytes[i] != null;
+  }
+
+  final firstRenderedNoteIndex = notes == null
+      ? -1
+      : List<int>.generate(notes.length, (i) => i)
+          .firstWhere((i) => hasNoteContent(i), orElse: () => -1);
+
+  final totalHours = periodEnd.difference(periodStart).inSeconds / 3600.0;
+  final renderedSections = (chartSections ?? const <CapacityChartSection>[])
+      .where((s) => s.series.values.any((v) => v.isNotEmpty))
+      .toList();
+
+  // De eerste grafiek staat direct onder de Bezettingsgrafiek-sectie (geen
+  // nieuwe pagina); daarna telkens twee grafieken per pagina.
+  final chartWidgets = <pw.Widget>[];
+  for (var i = 0; i < renderedSections.length; i++) {
+    if (i >= 1 && (i - 1) % 2 == 0) chartWidgets.add(pw.NewPage());
+    chartWidgets.add(_chartSectionWidget(
+      title: renderedSections[i].title,
+      series: renderedSections[i].series,
+      ratedA: ratedA,
+      periodStart: periodStart,
+      totalHours: totalHours,
+    ));
+  }
 
   final pdf = pw.Document(
     theme: pw.ThemeData.withFont(
@@ -73,9 +202,76 @@ Future<void> exportCapacityPdf({
       ],
     ),
     build: (ctx) => [
+      // ── Algemene gegevens ────────────────────────────────────────────────────
+      if (generalInfo != null && !generalInfo.isEmpty) ...[
+        pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Expanded(
+              child: pw.Text('Stroom Capaciteitsrapport',
+                  style: pw.TextStyle(
+                      fontSize: 22, fontWeight: pw.FontWeight.bold)),
+            ),
+            if (logo != null) pw.Image(logo, width: 40, height: 40),
+          ],
+        ),
+        pw.Divider(thickness: 1.5, color: PdfColors.grey400),
+        pw.SizedBox(height: 12),
+        pw.Text('Algemene gegevens',
+            style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 8),
+        _generalInfoSection('Opdrachtgever', [
+          ('Naam bedrijf', generalInfo.clientCompany),
+          ('Adres', generalInfo.clientAddress),
+          ('Postcode plaats', generalInfo.clientPostalCity),
+          ('Contactpersoon', generalInfo.clientContact),
+          ('Telefoonnummer', generalInfo.clientPhone),
+          ('Mail', generalInfo.clientEmail),
+        ]),
+        pw.SizedBox(height: 16),
+        _generalInfoSection('Inspectieadres', [
+          ('Naam', generalInfo.inspectionName),
+          ('Adres', generalInfo.inspectionAddress),
+          ('Postcode plaats', generalInfo.inspectionPostalCity),
+          ('Contactpersoon', generalInfo.inspectionContact),
+          ('Telefoonnummer', generalInfo.inspectionPhone),
+          ('Mail', generalInfo.inspectionEmail),
+        ]),
+        pw.SizedBox(height: 16),
+        _generalInfoSection('Inspectiebedrijf', [
+          ('Naam bedrijf', generalInfo.inspectorCompany),
+          ('Adres', generalInfo.inspectorAddress),
+          ('Postcode plaats', generalInfo.inspectorPostalCity),
+          ('Telefoon', generalInfo.inspectorPhone),
+          ('Mail', generalInfo.inspectorEmail),
+          ('Contactpersoon', generalInfo.inspectorContact),
+          ('Auteur', generalInfo.inspectorResponsible),
+        ]),
+        pw.NewPage(),
+      ],
+
+      // ── Inleiding ────────────────────────────────────────────────────────────
+      if (introText != null && introText.trim().isNotEmpty) ...[
+        pw.Row(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Expanded(
+              child: pw.Text('Inleiding',
+                  style: pw.TextStyle(
+                      fontSize: 22, fontWeight: pw.FontWeight.bold)),
+            ),
+            if (logo != null) pw.Image(logo, width: 40, height: 40),
+          ],
+        ),
+        pw.Divider(thickness: 1.5, color: PdfColors.grey400),
+        pw.SizedBox(height: 8),
+        pw.Text(introText.trim(), style: const pw.TextStyle(fontSize: 10)),
+        pw.NewPage(),
+      ],
+
       // ── Header ──────────────────────────────────────────────────────────────
       pw.Row(
-        crossAxisAlignment: pw.CrossAxisAlignment.end,
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         children: [
           pw.Expanded(
             child: pw.Column(
@@ -91,9 +287,16 @@ Future<void> exportCapacityPdf({
               ],
             ),
           ),
-          pw.Text('Gegenereerd: ${fmt.format(now)}',
-              style: const pw.TextStyle(
-                  fontSize: 8, color: PdfColors.grey500)),
+          pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
+            children: [
+              if (logo != null) pw.Image(logo, width: 40, height: 40),
+              pw.SizedBox(height: 4),
+              pw.Text('Gegenereerd: ${fmt.format(now)}',
+                  style: const pw.TextStyle(
+                      fontSize: 8, color: PdfColors.grey500)),
+            ],
+          ),
         ],
       ),
       pw.Divider(thickness: 1.5, color: PdfColors.grey400),
@@ -119,60 +322,6 @@ Future<void> exportCapacityPdf({
       ),
       pw.SizedBox(height: 16),
 
-      // ── Summary table ────────────────────────────────────────────────────────
-      pw.Text('Resultaten per fase',
-          style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
-      pw.SizedBox(height: 6),
-      _summaryTable(phases, ratedA),
-      pw.SizedBox(height: 16),
-
-      // ── Per-phase utilization bars ───────────────────────────────────────────
-      pw.Text('Bezettingsgrafiek',
-          style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
-      pw.SizedBox(height: 8),
-      ...phases.map((p) => _phaseBar(p)),
-      pw.SizedBox(height: 16),
-
-      // ── Stroomgrafiek ────────────────────────────────────────────────────────
-      if (chartSeries != null && chartSeries.values.any((s) => s.isNotEmpty)) ...[
-        pw.Text('Stroom over tijd',
-            style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
-        pw.SizedBox(height: 6),
-        _buildLineChart(
-          series: chartSeries,
-          ratedA: ratedA,
-          periodStart: periodStart,
-          totalHours:
-              periodEnd.difference(periodStart).inSeconds / 3600.0,
-        ),
-        pw.SizedBox(height: 6),
-        // Legenda
-        pw.Row(children: [
-          for (final entry in {
-            'L1': PdfColors.red,
-            'L2': PdfColors.amber,
-            'L3': PdfColors.blue,
-            'N': PdfColors.grey600,
-          }.entries)
-            if (chartSeries.containsKey(entry.key) &&
-                chartSeries[entry.key]!.isNotEmpty) ...[
-              pw.Container(
-                  width: 12,
-                  height: 3,
-                  color: entry.value),
-              pw.SizedBox(width: 4),
-              pw.Text(entry.key,
-                  style: const pw.TextStyle(fontSize: 8)),
-              pw.SizedBox(width: 12),
-            ],
-          pw.Container(width: 12, height: 3, color: PdfColors.grey400),
-          pw.SizedBox(width: 4),
-          pw.Text('Max (${ratedA.toStringAsFixed(0)} A)',
-              style: const pw.TextStyle(fontSize: 8)),
-        ]),
-        pw.SizedBox(height: 16),
-      ],
-
       // ── Legend ───────────────────────────────────────────────────────────────
       pw.Container(
         padding: const pw.EdgeInsets.all(8),
@@ -194,6 +343,62 @@ Future<void> exportCapacityPdf({
               style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600)),
         ]),
       ),
+      pw.SizedBox(height: 16),
+
+      // ── Summary table ────────────────────────────────────────────────────────
+      pw.Text('Resultaten per fase',
+          style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+      pw.SizedBox(height: 6),
+      _summaryTable(phases, ratedA),
+      pw.SizedBox(height: 16),
+
+      // ── Per-phase utilization bars ───────────────────────────────────────────
+      pw.Text('Bezettingsgrafiek',
+          style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+      pw.SizedBox(height: 8),
+      ...phases.map((p) => _phaseBar(p)),
+      pw.SizedBox(height: 16),
+
+      // ── Stroomgrafieken (één per aggregatievariant / CSV-bestand) ────────────
+      ...chartWidgets,
+
+      // ── Aanvullende notities (titel/tekst/afbeelding) ────────────────────────
+      // De bijlage begint op een nieuwe pagina (ongeacht of de eerste
+      // notitie een afbeelding heeft). Een notitie mét afbeelding krijgt
+      // daarna steeds zijn eigen pagina; notities zonder afbeelding worden
+      // gewoon direct onder elkaar geplaatst, zonder paginascheiding.
+      if (notes != null)
+        for (var i = 0; i < notes.length; i++)
+          if (hasNoteContent(i)) ...[
+            if (i == firstRenderedNoteIndex) ...[
+              pw.NewPage(),
+              pw.Text('Bijlage',
+                  style: pw.TextStyle(
+                      fontSize: 22, fontWeight: pw.FontWeight.bold)),
+              pw.SizedBox(height: 2),
+            ] else if (noteImageBytes[i] != null) ...[
+              pw.NewPage(),
+            ] else ...[
+              pw.Divider(thickness: 1, color: PdfColors.grey300),
+              pw.SizedBox(height: 8),
+            ],
+            if (notes[i].title != null && notes[i].title!.trim().isNotEmpty)
+              pw.Text(notes[i].title!.trim(),
+                  style: pw.TextStyle(
+                      fontSize: 14, fontWeight: pw.FontWeight.bold)),
+            if (notes[i].bodyText != null &&
+                notes[i].bodyText!.trim().isNotEmpty) ...[
+              pw.SizedBox(height: 6),
+              pw.Text(notes[i].bodyText!.trim(),
+                  style: const pw.TextStyle(fontSize: 10)),
+            ],
+            if (noteImageBytes[i] != null) ...[
+              pw.SizedBox(height: 10),
+              pw.Image(pw.MemoryImage(noteImageBytes[i]!),
+                  fit: pw.BoxFit.contain, height: 260),
+            ],
+            pw.SizedBox(height: 16),
+          ],
     ],
   ));
 
@@ -225,6 +430,51 @@ Future<void> exportCapacityPdf({
 }
 
 // ── Helper widgets ──────────────────────────────────────────────────────────
+
+pw.Widget _generalInfoSection(String title, List<(String, String)> rows) {
+  final visibleRows = rows.where((r) => r.$2.trim().isNotEmpty).toList();
+  if (visibleRows.isEmpty) return pw.SizedBox();
+
+  return pw.Container(
+    padding: const pw.EdgeInsets.all(10),
+    decoration: pw.BoxDecoration(
+      color: PdfColors.grey100,
+      borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      border: pw.Border.all(color: PdfColors.grey300, width: 0.5),
+    ),
+    child: pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(title,
+            style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+        pw.SizedBox(height: 6),
+        pw.Table(
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.1),
+            1: pw.FlexColumnWidth(2.4),
+          },
+          children: [
+            for (final (label, value) in visibleRows)
+              pw.TableRow(children: [
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                  child: pw.Text(label,
+                      style: pw.TextStyle(
+                          fontSize: 9,
+                          fontWeight: pw.FontWeight.bold,
+                          color: PdfColors.grey700)),
+                ),
+                pw.Padding(
+                  padding: const pw.EdgeInsets.symmetric(vertical: 3),
+                  child: pw.Text(value, style: const pw.TextStyle(fontSize: 10)),
+                ),
+              ]),
+          ],
+        ),
+      ],
+    ),
+  );
+}
 
 pw.Widget _infoBlock(String label, String value) => pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -400,6 +650,64 @@ pw.Widget _phaseBar(PhaseReportData p) {
   );
 }
 
+/// Titel + grafiek + legenda voor één [CapacityChartSection].
+pw.Widget _chartSectionWidget({
+  required String title,
+  required Map<String, List<ChartPoint>> series,
+  required double ratedA,
+  required DateTime periodStart,
+  required double totalHours,
+}) {
+  const phaseColors = <String, PdfColor>{
+    'L1': PdfColors.red,
+    'L2': PdfColors.amber,
+    'L3': PdfColors.blue,
+    'N': PdfColors.grey600,
+  };
+
+  return pw.Column(
+    crossAxisAlignment: pw.CrossAxisAlignment.start,
+    children: [
+      pw.Text(title,
+          style: pw.TextStyle(fontSize: 13, fontWeight: pw.FontWeight.bold)),
+      pw.SizedBox(height: 6),
+      _buildLineChart(
+        series: series,
+        ratedA: ratedA,
+        periodStart: periodStart,
+        totalHours: totalHours,
+      ),
+      pw.SizedBox(height: 6),
+      // Legenda
+      pw.Row(children: [
+        for (final entry in phaseColors.entries)
+          if (series.containsKey(entry.key) &&
+              series[entry.key]!.isNotEmpty) ...[
+            pw.Container(width: 12, height: 3, color: entry.value),
+            pw.SizedBox(width: 4),
+            pw.Text(entry.key, style: const pw.TextStyle(fontSize: 8)),
+            pw.SizedBox(width: 12),
+          ],
+        pw.Container(width: 12, height: 3, color: PdfColors.grey400),
+        pw.SizedBox(width: 4),
+        pw.Text('Max (${ratedA.toStringAsFixed(0)} A)',
+            style: const pw.TextStyle(fontSize: 8)),
+        pw.SizedBox(width: 12),
+        pw.Container(width: 12, height: 2, color: PdfColors.green700),
+        pw.SizedBox(width: 4),
+        pw.Text('70% (${(ratedA * 0.70).toStringAsFixed(0)} A)',
+            style: const pw.TextStyle(fontSize: 8)),
+        pw.SizedBox(width: 12),
+        pw.Container(width: 12, height: 2, color: PdfColors.red),
+        pw.SizedBox(width: 4),
+        pw.Text('90% (${(ratedA * 0.90).toStringAsFixed(0)} A)',
+            style: const pw.TextStyle(fontSize: 8)),
+      ]),
+      pw.SizedBox(height: 16),
+    ],
+  );
+}
+
 pw.Widget _buildLineChart({
   required Map<String, List<ChartPoint>> series,
   required double ratedA,
@@ -458,7 +766,27 @@ pw.Widget _buildLineChart({
         ),
       ),
       datasets: [
-        // Maximale stroom als stippellijn
+        // 70%-grens (groen/oranje)
+        pw.LineDataSet<pw.PointChartValue>(
+          data: [
+            pw.PointChartValue(xTicks.first, ratedA * 0.70),
+            pw.PointChartValue(xTicks.last, ratedA * 0.70),
+          ],
+          color: PdfColors.green700,
+          lineWidth: 0.6,
+          drawPoints: false,
+        ),
+        // 90%-grens (oranje/rood)
+        pw.LineDataSet<pw.PointChartValue>(
+          data: [
+            pw.PointChartValue(xTicks.first, ratedA * 0.90),
+            pw.PointChartValue(xTicks.last, ratedA * 0.90),
+          ],
+          color: PdfColors.red,
+          lineWidth: 0.6,
+          drawPoints: false,
+        ),
+        // Maximale stroom
         pw.LineDataSet<pw.PointChartValue>(
           data: [
             pw.PointChartValue(xTicks.first, ratedA),

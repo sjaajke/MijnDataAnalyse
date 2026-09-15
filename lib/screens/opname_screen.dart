@@ -32,6 +32,9 @@ class _OpnameScreenState extends State<OpnameScreen> {
   double _filterMinMs = 0;
   double _filterMaxMs = double.infinity;
 
+  bool _showThd = true;
+  bool _showCosPhi = true;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -263,6 +266,26 @@ class _OpnameScreenState extends State<OpnameScreen> {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+
+          // ── Grafiek-toggles ──────────────────────────────────────────────
+          Wrap(
+            spacing: 6,
+            children: [
+              if (hasHarmonics && hasCurrent)
+                FilterChip(
+                  label: const Text('THD stroom'),
+                  selected: _showThd,
+                  onSelected: (v) => setState(() => _showThd = v),
+                ),
+              if (hasCosPhi)
+                FilterChip(
+                  label: const Text('Vermogensfactor'),
+                  selected: _showCosPhi,
+                  onSelected: (v) => setState(() => _showCosPhi = v),
+                ),
+            ],
+          ),
 
           // ── Time range selector ──────────────────────────────────────────
           TimeRangeSelector(
@@ -290,7 +313,7 @@ class _OpnameScreenState extends State<OpnameScreen> {
             ),
 
           // ── THD % per fase (afgeleid van harmonischen) ───────────────────
-          if (hasHarmonics && hasCurrent)
+          if (hasHarmonics && hasCurrent && _showThd)
             _ThdTimeSeriesChart(
               harmonics: harmonicsFiltered,
               currents: currentFiltered,
@@ -299,7 +322,7 @@ class _OpnameScreenState extends State<OpnameScreen> {
             ),
 
           // ── Cos φ ─────────────────────────────────────────────────────────
-          if (hasCosPhi)
+          if (hasCosPhi && _showCosPhi)
             _CosPhiTimeSeriesChart(
               data: cosPhiFiltered,
               xMin: fMin,
@@ -456,7 +479,7 @@ LineTouchData _touchData(
 // 1. Stroom tijdreeks
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _CurrentTimeSeriesChart extends StatelessWidget {
+class _CurrentTimeSeriesChart extends StatefulWidget {
   final List<MeasurementPoint> data;
   final double xMin, xMax;
 
@@ -467,53 +490,201 @@ class _CurrentTimeSeriesChart extends StatelessWidget {
   });
 
   @override
+  State<_CurrentTimeSeriesChart> createState() =>
+      _CurrentTimeSeriesChartState();
+}
+
+class _CurrentTimeSeriesChartState extends State<_CurrentTimeSeriesChart> {
+  final _visiblePhases = <String>{'L1', 'L2', 'L3', 'N'};
+  bool _showAvg = false;
+  bool _showPeak = false;
+  bool _showMin = false;
+
+  @override
   Widget build(BuildContext context) {
-    List<FlSpot> spots(String key) => data
+    const phaseConfig = [
+      ('L1', Colors.red),
+      ('L2', Colors.amber),
+      ('L3', Colors.blue),
+      ('N',  Colors.grey),
+    ];
+
+    List<FlSpot> spots(String key) => widget.data
         .where((p) => p.values.containsKey(key))
         .map((p) =>
             FlSpot(p.time.millisecondsSinceEpoch.toDouble(), p.values[key]!))
         .toList();
 
-    final l1 = spots('I_L1');
-    final l2 = spots('I_L2');
-    final l3 = spots('I_L3');
-    final n = spots('I_N');
+    // Per-fase statistieken berekenen
+    final stats = <String, ({double avg, double peak, double min})>{};
+    for (final (phase, _) in phaseConfig) {
+      final vals = widget.data
+          .map((p) => p.values['I_$phase'])
+          .whereType<double>()
+          .toList();
+      if (vals.isEmpty) continue;
+      stats[phase] = (
+        avg: vals.reduce((a, b) => a + b) / vals.length,
+        peak: vals.reduce((a, b) => a > b ? a : b),
+        min: vals.reduce((a, b) => a < b ? a : b),
+      );
+    }
+
+    final visibleConfig =
+        phaseConfig.where((e) => _visiblePhases.contains(e.$1)).toList();
+
+    // Referentielijnen
+    final refLines = <HorizontalLine>[];
+    for (final (phase, color) in visibleConfig) {
+      final st = stats[phase];
+      if (st == null) continue;
+      if (_showAvg) {
+        refLines.add(HorizontalLine(
+          y: st.avg,
+          color: color.withValues(alpha: 0.8),
+          strokeWidth: 1.2,
+          label: HorizontalLineLabel(
+            show: true,
+            labelResolver: (_) =>
+                '$phase gem ${st.avg.toStringAsFixed(1)} A',
+            style: TextStyle(fontSize: 9, color: color.withValues(alpha: 0.8)),
+            alignment: Alignment.bottomLeft,
+          ),
+        ));
+      }
+      if (_showPeak) {
+        refLines.add(HorizontalLine(
+          y: st.peak,
+          color: color,
+          strokeWidth: 1.5,
+          dashArray: [6, 3],
+          label: HorizontalLineLabel(
+            show: true,
+            labelResolver: (_) =>
+                '$phase piek ${st.peak.toStringAsFixed(1)} A',
+            style: TextStyle(fontSize: 9, color: color),
+            alignment: Alignment.topLeft,
+          ),
+        ));
+      }
+      if (_showMin) {
+        refLines.add(HorizontalLine(
+          y: st.min,
+          color: color.withValues(alpha: 0.5),
+          strokeWidth: 1.0,
+          dashArray: [2, 4],
+          label: HorizontalLineLabel(
+            show: true,
+            labelResolver: (_) =>
+                '$phase min ${st.min.toStringAsFixed(1)} A',
+            style: TextStyle(fontSize: 9, color: color.withValues(alpha: 0.6)),
+            alignment: Alignment.bottomRight,
+          ),
+        ));
+      }
+    }
+
+    // Lijn-series
+    final seriesMeta = <(String, Color)>[];
+    final lineBarsData = <LineChartBarData>[];
+    for (final (phase, color) in visibleConfig) {
+      final s = spots('I_$phase');
+      if (s.isEmpty) continue;
+      seriesMeta.add((phase, color));
+      lineBarsData.add(_line(s, color));
+    }
 
     double maxY = 0;
-    for (final s in [...l1, ...l2, ...l3, ...n]) {
-      if (s.y > maxY) maxY = s.y;
+    for (final bar in lineBarsData) {
+      for (final s in bar.spots) {
+        if (s.y > maxY) maxY = s.y;
+      }
     }
 
     final chartData = LineChartData(
-      minX: xMin,
-      maxX: xMax,
+      minX: widget.xMin,
+      maxX: widget.xMax,
       minY: 0,
       maxY: maxY * 1.15,
       clipData: const FlClipData.all(),
       gridData: const FlGridData(show: true),
       borderData: FlBorderData(show: false),
-      titlesData: _sharedTitles(xMin, xMax,
+      extraLinesData: ExtraLinesData(horizontalLines: refLines),
+      titlesData: _sharedTitles(widget.xMin, widget.xMax,
           yLabel: 'A', yFormatter: (v) => v.roundToDouble()),
-      lineBarsData: [
-        _line(l1, Colors.red),
-        _line(l2, Colors.amber),
-        _line(l3, Colors.blue),
-        _line(n, Colors.grey),
-      ],
-      lineTouchData:
-          _touchData(['L1', 'L2', 'L3', 'N'],
-              [Colors.red, Colors.amber, Colors.blue, Colors.grey], 'A'),
+      lineBarsData: lineBarsData,
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => Colors.black87,
+          getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+            final idx = s.barIndex.clamp(0, seriesMeta.length - 1);
+            final (phase, color) = seriesMeta[idx];
+            return LineTooltipItem(
+              '$phase: ${s.y.toStringAsFixed(3)} A',
+              TextStyle(color: color, fontSize: 11),
+            );
+          }).toList(),
+        ),
+      ),
     );
 
-    return ChartWrapper(
-      title: 'Stroom (A) — 10-min gemiddelden',
-      chartData: chartData,
-      height: 280,
-      legendItems: const [
-        LegendItem(label: 'L1', color: Colors.red),
-        LegendItem(label: 'L2', color: Colors.amber),
-        LegendItem(label: 'L3', color: Colors.blue),
-        LegendItem(label: 'N', color: Colors.grey),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Toggles
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 0),
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              for (final (phase, color) in phaseConfig)
+                FilterChip(
+                  label: Text(phase),
+                  selected: _visiblePhases.contains(phase),
+                  selectedColor: color.withValues(alpha: 0.25),
+                  checkmarkColor: color,
+                  side: BorderSide(
+                    color: _visiblePhases.contains(phase)
+                        ? color
+                        : Colors.grey.shade600,
+                  ),
+                  onSelected: (on) => setState(() {
+                    if (on) {
+                      _visiblePhases.add(phase);
+                    } else if (_visiblePhases.length > 1) {
+                      _visiblePhases.remove(phase);
+                    }
+                  }),
+                ),
+              const SizedBox(width: 8),
+              FilterChip(
+                label: const Text('Gemiddeld'),
+                selected: _showAvg,
+                onSelected: (v) => setState(() => _showAvg = v),
+              ),
+              FilterChip(
+                label: const Text('Piek'),
+                selected: _showPeak,
+                onSelected: (v) => setState(() => _showPeak = v),
+              ),
+              FilterChip(
+                label: const Text('Minimum'),
+                selected: _showMin,
+                onSelected: (v) => setState(() => _showMin = v),
+              ),
+            ],
+          ),
+        ),
+        ChartWrapper(
+          title: 'Stroom (A) — 10-min gemiddelden',
+          chartData: chartData,
+          height: 280,
+          legendItems: [
+            for (final (phase, color) in seriesMeta)
+              LegendItem(label: phase, color: color),
+          ],
+        ),
       ],
     );
   }
@@ -821,8 +992,13 @@ class _SnapshotPanel extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             SizedBox(
-              height: 260,
-              child: _HarmonicSpectrumChart(snap: snap),
+              height: 320,
+              child: _HarmonicSpectrumChart(
+                snap: snap,
+                fundL1: iL1,
+                fundL2: iL2,
+                fundL3: iL3,
+              ),
             ),
           ],
         ),
@@ -946,101 +1122,167 @@ class _ValueTable extends StatelessWidget {
 // Harmonic spectrum bar chart for a single snapshot
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _HarmonicSpectrumChart extends StatelessWidget {
+enum _HarmFilter { both, odd, even }
+
+class _HarmonicSpectrumChart extends StatefulWidget {
   final HarmonicPoint snap;
-  const _HarmonicSpectrumChart({required this.snap});
+  final double fundL1, fundL2, fundL3;
+
+  const _HarmonicSpectrumChart({
+    required this.snap,
+    required this.fundL1,
+    required this.fundL2,
+    required this.fundL3,
+  });
+
+  @override
+  State<_HarmonicSpectrumChart> createState() => _HarmonicSpectrumChartState();
+}
+
+class _HarmonicSpectrumChartState extends State<_HarmonicSpectrumChart> {
+  int _maxOrder = 25;
+  _HarmFilter _filter = _HarmFilter.both;
+  bool _showH1 = false;
 
   @override
   Widget build(BuildContext context) {
-    const maxOrder = 25; // h2..h25 — EN50160 relevant range
-    final count = min(maxOrder - 1, snap.l1.length); // h2..h25 = 24 bars
+    // Bepaal welke ordes getoond worden
+    final orders = <int>[];
+    for (int h = 1; h <= _maxOrder; h++) {
+      if (h == 1 && !_showH1) continue;
+      final isOdd = h % 2 != 0;
+      if (_filter == _HarmFilter.odd && !isOdd) continue;
+      if (_filter == _HarmFilter.even && isOdd) continue;
+      orders.add(h);
+    }
 
-    final groups = List.generate(count, (i) {
-      final h = i + 2;
-      return BarChartGroupData(
+    // Bouw bar-groepen
+    final groups = <BarChartGroupData>[];
+    for (final h in orders) {
+      double v1, v2, v3;
+      if (h == 1) {
+        v1 = widget.fundL1;
+        v2 = widget.fundL2;
+        v3 = widget.fundL3;
+      } else {
+        final idx = h - 2; // h2 = index 0
+        if (idx >= widget.snap.l1.length) continue;
+        v1 = widget.snap.l1[idx];
+        v2 = widget.snap.l2[idx];
+        v3 = widget.snap.l3[idx];
+      }
+      final barWidth = _maxOrder <= 10 ? 6.0 : _maxOrder <= 15 ? 4.5 : 3.0;
+      groups.add(BarChartGroupData(
         x: h,
         barRods: [
-          BarChartRodData(
-              toY: snap.l1[i],
-              color: Colors.red,
-              width: 4,
-              borderRadius: BorderRadius.zero),
-          BarChartRodData(
-              toY: snap.l2[i],
-              color: Colors.amber,
-              width: 4,
-              borderRadius: BorderRadius.zero),
-          BarChartRodData(
-              toY: snap.l3[i],
-              color: Colors.blue,
-              width: 4,
-              borderRadius: BorderRadius.zero),
+          BarChartRodData(toY: v1, color: Colors.red,   width: barWidth, borderRadius: BorderRadius.zero),
+          BarChartRodData(toY: v2, color: Colors.amber, width: barWidth, borderRadius: BorderRadius.zero),
+          BarChartRodData(toY: v3, color: Colors.blue,  width: barWidth, borderRadius: BorderRadius.zero),
         ],
         barsSpace: 1,
-      );
-    });
+      ));
+    }
 
     final maxY = groups
         .expand((g) => g.barRods.map((r) => r.toY))
         .fold<double>(0.001, (a, b) => a > b ? a : b);
 
-    return BarChart(
-      BarChartData(
-        barGroups: groups,
-        maxY: maxY * 1.2,
-        minY: 0,
-        gridData: FlGridData(
-          drawVerticalLine: false,
-          horizontalInterval: maxY / 4,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Bedieningselementen
+        Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            // Bereik
+            SegmentedButton<int>(
+              segments: const [
+                ButtonSegment(value: 10,  label: Text('h1–10')),
+                ButtonSegment(value: 15,  label: Text('h1–15')),
+                ButtonSegment(value: 25,  label: Text('h1–25')),
+              ],
+              selected: {_maxOrder},
+              onSelectionChanged: (v) => setState(() => _maxOrder = v.first),
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            ),
+            FilterChip(
+              label: const Text('h1'),
+              selected: _showH1,
+              onSelected: (v) => setState(() => _showH1 = v),
+            ),
+            const SizedBox(width: 8),
+            // Oneven / even / beide
+            SegmentedButton<_HarmFilter>(
+              segments: const [
+                ButtonSegment(value: _HarmFilter.both, label: Text('Beide')),
+                ButtonSegment(value: _HarmFilter.odd,  label: Text('Oneven')),
+                ButtonSegment(value: _HarmFilter.even, label: Text('Even')),
+              ],
+              selected: {_filter},
+              onSelectionChanged: (v) => setState(() => _filter = v.first),
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            ),
+          ],
         ),
-        borderData: FlBorderData(show: false),
-        titlesData: FlTitlesData(
-          leftTitles: AxisTitles(
-            axisNameWidget:
-                const Text('A', style: TextStyle(fontSize: 11)),
-            sideTitles: SideTitles(
-              showTitles: true,
-              reservedSize: 44,
-              getTitlesWidget: (v, meta) => SideTitleWidget(
-                meta: meta,
-                child: Text(v.toStringAsFixed(3),
-                    style: const TextStyle(fontSize: 8)),
+        const SizedBox(height: 8),
+
+        // Grafiek
+        Expanded(
+          child: BarChart(
+            BarChartData(
+              barGroups: groups,
+              maxY: maxY * 1.2,
+              minY: 0,
+              gridData: FlGridData(
+                drawVerticalLine: false,
+                horizontalInterval: maxY / 4,
+              ),
+              borderData: FlBorderData(show: false),
+              titlesData: FlTitlesData(
+                leftTitles: AxisTitles(
+                  axisNameWidget:
+                      const Text('A', style: TextStyle(fontSize: 11)),
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 44,
+                    getTitlesWidget: (v, meta) => SideTitleWidget(
+                      meta: meta,
+                      child: Text(v.toStringAsFixed(3),
+                          style: const TextStyle(fontSize: 8)),
+                    ),
+                  ),
+                ),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    getTitlesWidget: (v, meta) => SideTitleWidget(
+                      meta: meta,
+                      child: Text('h${v.toInt()}',
+                          style: const TextStyle(fontSize: 9)),
+                    ),
+                  ),
+                ),
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+              ),
+              barTouchData: BarTouchData(
+                touchTooltipData: BarTouchTooltipData(
+                  getTooltipItem: (group, _, rod, rodIndex) {
+                    final phase = ['L1', 'L2', 'L3'][rodIndex];
+                    return BarTooltipItem(
+                      'h${group.x} $phase\n${rod.toY.toStringAsFixed(4)} A',
+                      const TextStyle(fontSize: 11),
+                    );
+                  },
+                ),
               ),
             ),
           ),
-          bottomTitles: AxisTitles(
-            sideTitles: SideTitles(
-              showTitles: true,
-              getTitlesWidget: (v, meta) {
-                final h = v.toInt();
-                if (h == 2 || h % 2 != 0) {
-                  return SideTitleWidget(
-                    meta: meta,
-                    child: Text('h$h',
-                        style: const TextStyle(fontSize: 9)),
-                  );
-                }
-                return const SizedBox.shrink();
-              },
-            ),
-          ),
-          topTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false)),
-          rightTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false)),
         ),
-        barTouchData: BarTouchData(
-          touchTooltipData: BarTouchTooltipData(
-            getTooltipItem: (group, _, rod, rodIndex) {
-              final phase = ['L1', 'L2', 'L3'][rodIndex];
-              return BarTooltipItem(
-                'h${group.x} $phase\n${rod.toY.toStringAsFixed(4)} A',
-                const TextStyle(fontSize: 11),
-              );
-            },
-          ),
-        ),
-      ),
+      ],
     );
   }
 }

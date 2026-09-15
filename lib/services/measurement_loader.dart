@@ -32,6 +32,7 @@ class MeasurementLoader {
     final cosPhiPoints = <CosPhiPoint>[];
     final activePowerPoints = <MeasurementPoint>[];
     final reactivePowerPoints = <MeasurementPoint>[];
+    final apparentPowerPoints = <MeasurementPoint>[];
 
     if (cycResult != null) {
       for (final record in cycResult.records) {
@@ -160,15 +161,42 @@ class MeasurementLoader {
             }
           case 0x006a: // Active power P (W) per phase + total
             if (record.payload.length >= 4) {
+              final pValues = <String, double>{
+                'P_L1': record.payload[0],
+                'P_L2': record.payload[1],
+                'P_L3': record.payload[2],
+                'P_total': record.payload[3],
+              };
+              // New format (≥18 floats): power factor per phase at indices 15-17
+              if (record.payload.length >= 18) {
+                pValues['PF_L1'] = record.payload[15];
+                pValues['PF_L2'] = record.payload[16];
+                pValues['PF_L3'] = record.payload[17];
+              }
               activePowerPoints.add(MeasurementPoint(
                 time: record.timestamp,
-                values: {
-                  'P_L1': record.payload[0],
-                  'P_L2': record.payload[1],
-                  'P_L3': record.payload[2],
-                  'P_total': record.payload[3],
-                },
+                values: pValues,
               ));
+              // S = |P / PF| per phase
+              if (record.payload.length >= 18) {
+                final pf1 = record.payload[15];
+                final pf2 = record.payload[16];
+                final pf3 = record.payload[17];
+                if (pf1 != 0 && pf2 != 0 && pf3 != 0) {
+                  final sL1 = (record.payload[0] / pf1).abs();
+                  final sL2 = (record.payload[1] / pf2).abs();
+                  final sL3 = (record.payload[2] / pf3).abs();
+                  apparentPowerPoints.add(MeasurementPoint(
+                    time: record.timestamp,
+                    values: {
+                      'S_L1': sL1,
+                      'S_L2': sL2,
+                      'S_L3': sL3,
+                      'S_total': sL1 + sL2 + sL3,
+                    },
+                  ));
+                }
+              }
             }
           case 0x0074: // Reactive power Q (VAr) per phase
             if (record.payload.length >= 3) {
@@ -287,6 +315,10 @@ class MeasurementLoader {
         .toList()
       ..sort((a, b) => a.time.compareTo(b.time));
 
+    // Voor PQBox150: cyc10s.pqf bevat geen stroomdata; cyc.pqf heeft al 10-sec stroom.
+    final currentPoints10sResolved =
+        currentPoints10s.isNotEmpty ? currentPoints10s : currentPoints;
+
     // --- event.pqf: events ---
     final events = <PqfEvent>[];
 
@@ -327,7 +359,7 @@ class MeasurementLoader {
       voltageData: voltagePoints,
       voltageData10s: voltagePoints10s,
       currentData: currentPoints,
-      currentData10s: currentPoints10s,
+      currentData10s: currentPoints10sResolved,
       frequencyData10min: freqPoints10min,
       frequencyData10s: freqPoints10s,
       events: events,
@@ -335,6 +367,7 @@ class MeasurementLoader {
       cosPhiData: cosPhiPoints,
       activePowerData: activePowerPoints,
       reactivePowerData: reactivePowerPoints,
+      apparentPowerData: apparentPowerPoints,
     );
   }
 }
