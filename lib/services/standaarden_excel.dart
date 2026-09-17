@@ -74,6 +74,7 @@ Future<void> importStandaardenExcel({required BuildContext context}) async {
 
   if (!context.mounted) return;
   final provider = context.read<StandaardenProvider>();
+  await provider.clearAll();
 
   var imported = 0;
   for (var i = 0; i < sheet.rows.length; i++) {

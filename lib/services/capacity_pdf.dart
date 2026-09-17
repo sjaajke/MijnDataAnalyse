@@ -28,12 +28,19 @@ class CapacityChartSection {
   final String unit;
   final bool showRatedLine;
   final String neutralLabel;
+
+  /// Legendalabel per fase-sleutel (L1/L2/L3/N), bv. de originele PQ-Box
+  /// CSV-kolomkop ("IL1_max-sp_[A]"). Ontbreekt een sleutel, dan valt de
+  /// legenda terug op de fase-sleutel zelf (of [neutralLabel] voor 'N').
+  final Map<String, String>? phaseLabels;
+
   const CapacityChartSection({
     required this.title,
     required this.series,
     this.unit = 'A',
     this.showRatedLine = true,
     this.neutralLabel = 'N',
+    this.phaseLabels,
   });
 }
 
@@ -190,6 +197,7 @@ Future<void> exportCapacityPdf({
       unit: renderedSections[i].unit,
       showRatedLine: renderedSections[i].showRatedLine,
       neutralLabel: renderedSections[i].neutralLabel,
+      phaseLabels: renderedSections[i].phaseLabels,
       ratedA: ratedA,
       periodStart: periodStart,
       totalHours: totalHours,
@@ -676,6 +684,7 @@ pw.Widget _chartSectionWidget({
   String unit = 'A',
   bool showRatedLine = true,
   String neutralLabel = 'N',
+  Map<String, String>? phaseLabels,
 }) {
   const phaseColors = <String, PdfColor>{
     'L1': PdfColors.red,
@@ -706,7 +715,9 @@ pw.Widget _chartSectionWidget({
               series[entry.key]!.isNotEmpty) ...[
             pw.Container(width: 12, height: 3, color: entry.value),
             pw.SizedBox(width: 4),
-            pw.Text(entry.key == 'N' ? neutralLabel : entry.key,
+            pw.Text(
+                phaseLabels?[entry.key] ??
+                    (entry.key == 'N' ? neutralLabel : entry.key),
                 style: const pw.TextStyle(fontSize: 8)),
             pw.SizedBox(width: 12),
           ],

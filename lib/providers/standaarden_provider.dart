@@ -62,4 +62,10 @@ class StandaardenProvider extends ChangeNotifier {
     notifyListeners();
     await _save();
   }
+
+  Future<void> clearAll() async {
+    _standaarden.clear();
+    notifyListeners();
+    await _save();
+  }
 }

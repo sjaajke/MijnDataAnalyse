@@ -69,6 +69,14 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
     super.dispose();
   }
 
+  void _addNote() => setState(() => _notes.add(_NoteEntry()));
+
+  void _removeNote(int index) => setState(() {
+    final note = _notes.removeAt(index);
+    note.titleController.dispose();
+    note.textController.dispose();
+  });
+
   Future<void> _pickImage(int index) async {
     final result = await FilePicker.platform.pickFiles(type: FileType.image);
     final path = result?.files.single.path;
@@ -165,20 +173,37 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
   String _headerAgg(String variant) =>
       _variantHeaderAgg[variant] ?? (variant.isEmpty ? '' : variant.substring(1));
 
-  /// Legenda-items met de originele PQ-Box CSV-kolomkoppen (bv.
-  /// "IL1_max-sp_[A]", "I_Neutral_[A]"), alleen voor de fases die na het
-  /// inladen daadwerkelijk data bevatten.
+  /// Originele PQ-Box CSV-kolomkoppen per fase-sleutel (bv. "IL1_max-sp_[A]",
+  /// "I_Neutral_[A]") voor de stroomgrafieken.
+  Map<String, String> _currentHeaders(String variant) {
+    final suffix = _headerAgg(variant).isEmpty ? '' : '_${_headerAgg(variant)}';
+    return {
+      'L1': 'IL1${suffix}_[A]',
+      'L2': 'IL2${suffix}_[A]',
+      'L3': 'IL3${suffix}_[A]',
+      'N': 'I_Neutral${suffix}_[A]',
+    };
+  }
+
+  /// Zelfde als [_currentHeaders], maar voor de vermogenkolomkoppen (bv.
+  /// "P_L1_[W]", "P_total_max_[W]").
+  Map<String, String> _powerHeaders(String variant) {
+    final suffix = _headerAgg(variant).isEmpty ? '' : '_${_headerAgg(variant)}';
+    return {
+      'L1': 'P_L1${suffix}_[W]',
+      'L2': 'P_L2${suffix}_[W]',
+      'L3': 'P_L3${suffix}_[W]',
+      'N': 'P_total${suffix}_[W]',
+    };
+  }
+
+  /// Legenda-items met de originele PQ-Box CSV-kolomkoppen, alleen voor de
+  /// fases die na het inladen daadwerkelijk data bevatten.
   List<LegendItem> _currentHeaderLegend(
     List<List<FlSpot>> phaseSpots,
     String variant,
   ) {
-    final suffix = _headerAgg(variant).isEmpty ? '' : '_${_headerAgg(variant)}';
-    final headers = [
-      'IL1${suffix}_[A]',
-      'IL2${suffix}_[A]',
-      'IL3${suffix}_[A]',
-      'I_Neutral${suffix}_[A]',
-    ];
+    final headers = _currentHeaders(variant).values.toList();
     return [
       for (var i = 0; i < headers.length; i++)
         if (phaseSpots[i].isNotEmpty)
@@ -186,19 +211,12 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
     ];
   }
 
-  /// Zelfde als [_currentHeaderLegend], maar voor de vermogenkolomkoppen
-  /// (bv. "P_L1_[W]", "P_total_max_[W]").
+  /// Zelfde als [_currentHeaderLegend], maar voor de vermogenkolomkoppen.
   List<LegendItem> _powerHeaderLegend(
     List<List<FlSpot>> phaseSpots,
     String variant,
   ) {
-    final suffix = _headerAgg(variant).isEmpty ? '' : '_${_headerAgg(variant)}';
-    final headers = [
-      'P_L1${suffix}_[W]',
-      'P_L2${suffix}_[W]',
-      'P_L3${suffix}_[W]',
-      'P_total${suffix}_[W]',
-    ];
+    final headers = _powerHeaders(variant).values.toList();
     return [
       for (var i = 0; i < headers.length; i++)
         if (phaseSpots[i].isNotEmpty)
@@ -526,6 +544,7 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
         if (_isChartIncluded('stroom$variant'))
           CapacityChartSection(
             title: '${_variantTitle('stroom', variant)} over tijd',
+            phaseLabels: _currentHeaders(variant),
             series: {
               for (final phase in ['L1', 'L2', 'L3', 'N'])
                 phase: sampled
@@ -547,6 +566,7 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
             unit: 'W',
             showRatedLine: false,
             neutralLabel: 'Totaal',
+            phaseLabels: _powerHeaders(variant),
             series: {
               for (final phase in ['L1', 'L2', 'L3'])
                 phase: sampledPower
@@ -804,7 +824,7 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
             ],
           ],
 
-          // Titel / Tekst / Afbeelding (x4)
+          // Titel / Tekst / Afbeelding (dynamisch aantal)
           for (int i = 0; i < _notes.length; i++) ...[
             Card(
               child: Padding(
@@ -812,14 +832,25 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _StandaardTitleDropdown(
-                      selectedId: _notes[i].standaardId,
-                      standaarden: standaarden,
-                      onSelected: (standaard) => setState(() {
-                        _notes[i].standaardId = standaard.id;
-                        _notes[i].titleController.text = standaard.titel;
-                        _notes[i].textController.text = standaard.tekst;
-                      }),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _StandaardTitleDropdown(
+                            selectedId: _notes[i].standaardId,
+                            standaarden: standaarden,
+                            onSelected: (standaard) => setState(() {
+                              _notes[i].standaardId = standaard.id;
+                              _notes[i].titleController.text = standaard.titel;
+                              _notes[i].textController.text = standaard.tekst;
+                            }),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Verwijderen',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () => _removeNote(i),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 10),
                     TextField(
@@ -837,8 +868,13 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
                 ),
               ),
             ),
-            if (i < _notes.length - 1) const SizedBox(height: 12),
+            const SizedBox(height: 12),
           ],
+          OutlinedButton.icon(
+            onPressed: _addNote,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('Blok toevoegen'),
+          ),
         ],
       ),
     );
