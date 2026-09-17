@@ -9,6 +9,7 @@ import '../models/bedrijfsgegevens.dart';
 import '../models/standaard.dart';
 import '../providers/bedrijfsgegevens_provider.dart';
 import '../providers/standaarden_provider.dart';
+import '../services/standaarden_excel.dart';
 
 class StandaardenScreen extends StatelessWidget {
   const StandaardenScreen({super.key});
@@ -191,6 +192,23 @@ class StandaardenScreen extends StatelessWidget {
             children: [
               Text('Standaarden', style: theme.textTheme.titleLarge),
               const Spacer(),
+              OutlinedButton.icon(
+                onPressed: () => importStandaardenExcel(context: context),
+                icon: const Icon(Icons.upload_file_outlined, size: 18),
+                label: const Text('Excel importeren'),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: provider.standaarden.isEmpty
+                    ? null
+                    : () => exportStandaardenExcel(
+                          context: context,
+                          standaarden: provider.standaarden,
+                        ),
+                icon: const Icon(Icons.grid_on_outlined, size: 18),
+                label: const Text('Excel exporteren'),
+              ),
+              const SizedBox(width: 8),
               FilledButton.icon(
                 onPressed: () => _openForm(context),
                 icon: const Icon(Icons.add, size: 18),

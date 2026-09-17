@@ -51,6 +51,7 @@ class PqBoxCsvParser {
       String? serial;
       int headerIndex = -1;
       List<String>? columns;
+      String delimiter = ';';
 
       for (int i = 0; i < lines.length; i++) {
         final line = lines[i].trim();
@@ -59,8 +60,10 @@ class PqBoxCsvParser {
           final m = RegExp(r'Serienummer:\s*(.+)$').firstMatch(line);
           if (m != null) serial = m.group(1)!.trim();
         }
-        if (line.toLowerCase().startsWith('datum;tijd')) {
-          columns = line.split(';');
+        final lower = line.toLowerCase();
+        if (lower.startsWith('datum;tijd') || lower.startsWith('datum\ttijd')) {
+          delimiter = lower.startsWith('datum\ttijd') ? '\t' : ';';
+          columns = line.split(delimiter);
           headerIndex = i;
           break;
         }
@@ -82,14 +85,15 @@ class PqBoxCsvParser {
       for (int i = headerIndex + 1; i < lines.length; i++) {
         final line = lines[i].trim();
         if (line.isEmpty) continue;
-        final fields = line.split(';');
+        final fields = line.split(delimiter);
         if (fields.length < 3) continue;
         final time = _parseDateTime(fields[0], fields[1]);
         if (time == null) continue;
 
         for (final entry in mappings.entries) {
           if (entry.key >= fields.length) continue;
-          final value = double.tryParse(fields[entry.key].trim());
+          final value =
+              double.tryParse(fields[entry.key].trim().replaceAll(',', '.'));
           if (value == null) continue;
           final bucket = switch (entry.value.quantity) {
             _Quantity.current => currentMap,
@@ -207,7 +211,7 @@ class PqBoxCsvParser {
   // ---------------------------------------------------------------------
 
   DateTime? _parseDateTime(String datePart, String timePart) {
-    final d = datePart.trim().split('.');
+    final d = datePart.trim().split(RegExp(r'[.\-]'));
     if (d.length != 3) return null;
     final t = timePart.trim().split(':');
     if (t.length != 3) return null;
