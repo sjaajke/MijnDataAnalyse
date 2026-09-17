@@ -30,6 +30,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
+  final Set<int> _bezochteIndices = {0};
 
   static const List<NavigationRailDestination> _destinations = [
     NavigationRailDestination(
@@ -202,8 +203,10 @@ class _HomeScreenState extends State<HomeScreen> {
               child: IntrinsicHeight(
                 child: NavigationRail(
                   selectedIndex: _selectedIndex,
-                  onDestinationSelected: (index) =>
-                      setState(() => _selectedIndex = index),
+                  onDestinationSelected: (index) => setState(() {
+                    _selectedIndex = index;
+                    _bezochteIndices.add(index);
+                  }),
                   labelType: NavigationRailLabelType.all,
                   destinations: _destinations,
                   leading: Padding(
@@ -336,7 +339,15 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: Stack(
               children: [
-                _screens[_selectedIndex],
+                IndexedStack(
+                  index: _selectedIndex,
+                  children: [
+                    for (var i = 0; i < _screens.length; i++)
+                      _bezochteIndices.contains(i)
+                          ? _screens[i]
+                          : const SizedBox.shrink(),
+                  ],
+                ),
                 if (provider.isLoading)
                   const Positioned.fill(
                     child: ColoredBox(

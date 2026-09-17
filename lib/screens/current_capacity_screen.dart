@@ -143,6 +143,131 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
     );
   }
 
+  static const _phaseLegendColors = [
+    Colors.red,
+    Colors.amber,
+    Colors.blue,
+    Colors.grey,
+  ];
+
+  /// Vertaalt de interne aggregatievariant-suffix (bv. "_max200ms",
+  /// "_maxsp", zoals gebruikt in [PqBoxCsvParser]) terug naar het
+  /// aggregatietoken zoals dat in de originele PQ-Box CSV-kolomkop staat
+  /// (bv. "max-200ms", "max-sp").
+  static const Map<String, String> _variantHeaderAgg = {
+    '': '',
+    '_min': 'min',
+    '_max': 'max',
+    '_max200ms': 'max-200ms',
+    '_maxsp': 'max-sp',
+  };
+
+  String _headerAgg(String variant) =>
+      _variantHeaderAgg[variant] ?? (variant.isEmpty ? '' : variant.substring(1));
+
+  /// Legenda-items met de originele PQ-Box CSV-kolomkoppen (bv.
+  /// "IL1_max-sp_[A]", "I_Neutral_[A]"), alleen voor de fases die na het
+  /// inladen daadwerkelijk data bevatten.
+  List<LegendItem> _currentHeaderLegend(
+    List<List<FlSpot>> phaseSpots,
+    String variant,
+  ) {
+    final suffix = _headerAgg(variant).isEmpty ? '' : '_${_headerAgg(variant)}';
+    final headers = [
+      'IL1${suffix}_[A]',
+      'IL2${suffix}_[A]',
+      'IL3${suffix}_[A]',
+      'I_Neutral${suffix}_[A]',
+    ];
+    return [
+      for (var i = 0; i < headers.length; i++)
+        if (phaseSpots[i].isNotEmpty)
+          LegendItem(label: headers[i], color: _phaseLegendColors[i]),
+    ];
+  }
+
+  /// Zelfde als [_currentHeaderLegend], maar voor de vermogenkolomkoppen
+  /// (bv. "P_L1_[W]", "P_total_max_[W]").
+  List<LegendItem> _powerHeaderLegend(
+    List<List<FlSpot>> phaseSpots,
+    String variant,
+  ) {
+    final suffix = _headerAgg(variant).isEmpty ? '' : '_${_headerAgg(variant)}';
+    final headers = [
+      'P_L1${suffix}_[W]',
+      'P_L2${suffix}_[W]',
+      'P_L3${suffix}_[W]',
+      'P_total${suffix}_[W]',
+    ];
+    return [
+      for (var i = 0; i < headers.length; i++)
+        if (phaseSpots[i].isNotEmpty)
+          LegendItem(label: headers[i], color: _phaseLegendColors[i]),
+    ];
+  }
+
+  Widget _buildCurrentChart(
+    String variant,
+    double fMin,
+    double fMax,
+    List<FlSpot> Function(String key) spotsFor,
+  ) {
+    final phaseSpots = [
+      spotsFor('I_L1$variant'),
+      spotsFor('I_L2$variant'),
+      spotsFor('I_L3$variant'),
+      spotsFor('I_N$variant'),
+    ];
+    return ChartWrapper(
+      title:
+          '${_variantTitle('stroom', variant)} vs. maximale stroom '
+          '(${_ratedA.toStringAsFixed(0)} A)',
+      trailing: _PdfIncludeSwitch(
+        included: _isChartIncluded('stroom$variant'),
+        onChanged: (v) =>
+            setState(() => _chartIncludedInPdf['stroom$variant'] = v),
+      ),
+      chartData: _buildChartData(phaseSpots, fMin, fMax),
+      height: 380,
+      legendItems: [
+        ..._currentHeaderLegend(phaseSpots, variant),
+        const LegendItem(label: 'Maximum', color: Colors.white60),
+      ],
+    );
+  }
+
+  Widget _buildPowerChart(
+    String variant,
+    double fMin,
+    double fMax,
+    List<FlSpot> Function(String key) powerSpotsFor,
+  ) {
+    final phaseSpots = [
+      powerSpotsFor('P_L1$variant'),
+      powerSpotsFor('P_L2$variant'),
+      powerSpotsFor('P_L3$variant'),
+      powerSpotsFor('P_total$variant'),
+    ];
+    return ChartWrapper(
+      title: '${_variantTitle('vermogen', variant)} over tijd',
+      trailing: _PdfIncludeSwitch(
+        included: _isChartIncluded('vermogen$variant'),
+        onChanged: (v) =>
+            setState(() => _chartIncludedInPdf['vermogen$variant'] = v),
+      ),
+      chartData: _buildLineChartData(
+        phaseSpots: phaseSpots,
+        fMin: fMin,
+        fMax: fMax,
+        labels: const ['L1', 'L2', 'L3', 'Totaal'],
+        unit: 'W',
+        yAxisLabel: 'Vermogen (W)',
+      ),
+      height: 380,
+      legendItems: _powerHeaderLegend(phaseSpots, variant),
+    );
+  }
+
   /// Generieke lijngrafiek voor stroom- of vermogendata. Wanneer
   /// [showThreshold] true is wordt een horizontale maximumlijn getoond
   /// (op [thresholdValue]) en het percentage daarvan in de tooltip; voor
@@ -659,34 +784,7 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
 
           // Eén grafiek per aggregatievariant (= per geïmporteerd CSV-bestand)
           for (final variant in orderedVariants) ...[
-            ChartWrapper(
-              title:
-                  '${_variantTitle('stroom', variant)} vs. maximale stroom '
-                  '(${_ratedA.toStringAsFixed(0)} A)',
-              trailing: _PdfIncludeSwitch(
-                included: _isChartIncluded('stroom$variant'),
-                onChanged: (v) =>
-                    setState(() => _chartIncludedInPdf['stroom$variant'] = v),
-              ),
-              chartData: _buildChartData(
-                [
-                  spotsFor('I_L1$variant'),
-                  spotsFor('I_L2$variant'),
-                  spotsFor('I_L3$variant'),
-                  spotsFor('I_N$variant'),
-                ],
-                fMin,
-                fMax,
-              ),
-              height: 380,
-              legendItems: const [
-                LegendItem(label: 'L1', color: Colors.red),
-                LegendItem(label: 'L2', color: Colors.amber),
-                LegendItem(label: 'L3', color: Colors.blue),
-                LegendItem(label: 'N', color: Colors.grey),
-                LegendItem(label: 'Maximum', color: Colors.white60),
-              ],
-            ),
+            _buildCurrentChart(variant, fMin, fMax, spotsFor),
             const SizedBox(height: 12),
           ],
 
@@ -701,35 +799,7 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
             ),
             const SizedBox(height: 8),
             for (final variant in orderedPowerVariants) ...[
-              ChartWrapper(
-                title: '${_variantTitle('vermogen', variant)} over tijd',
-                trailing: _PdfIncludeSwitch(
-                  included: _isChartIncluded('vermogen$variant'),
-                  onChanged: (v) => setState(
-                    () => _chartIncludedInPdf['vermogen$variant'] = v,
-                  ),
-                ),
-                chartData: _buildLineChartData(
-                  phaseSpots: [
-                    powerSpotsFor('P_L1$variant'),
-                    powerSpotsFor('P_L2$variant'),
-                    powerSpotsFor('P_L3$variant'),
-                    powerSpotsFor('P_total$variant'),
-                  ],
-                  fMin: fMin,
-                  fMax: fMax,
-                  labels: const ['L1', 'L2', 'L3', 'Totaal'],
-                  unit: 'W',
-                  yAxisLabel: 'Vermogen (W)',
-                ),
-                height: 380,
-                legendItems: const [
-                  LegendItem(label: 'L1', color: Colors.red),
-                  LegendItem(label: 'L2', color: Colors.amber),
-                  LegendItem(label: 'L3', color: Colors.blue),
-                  LegendItem(label: 'Totaal', color: Colors.grey),
-                ],
-              ),
+              _buildPowerChart(variant, fMin, fMax, powerSpotsFor),
               const SizedBox(height: 12),
             ],
           ],
