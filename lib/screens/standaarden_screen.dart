@@ -10,6 +10,7 @@ import '../models/standaard.dart';
 import '../providers/bedrijfsgegevens_provider.dart';
 import '../providers/standaarden_provider.dart';
 import '../services/standaarden_excel.dart';
+import '../services/import_picker.dart';
 
 class StandaardenScreen extends StatelessWidget {
   const StandaardenScreen({super.key});
@@ -433,8 +434,10 @@ class _BedrijfFormDialogState extends State<_BedrijfFormDialog> {
   }
 
   Future<void> _kiesLogo() async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image);
-    final path = result?.files.single.path;
+    final path = await pickImportFile(
+      type: FileType.image,
+      location: PickerLocation.afbeelding,
+    );
     if (path == null) return;
     final bytes = await File(path).readAsBytes();
     if (!mounted) return;

@@ -9,8 +9,8 @@ import '../providers/measurement_provider.dart';
 class TransientsScreen extends StatelessWidget {
   const TransientsScreen({super.key});
 
-  // Transient type IDs: HF (high-frequency impulse) and General
-  static const _transientIds = {0x03FD, 0x03F2};
+  // Transiënt-triggers uit event.pqf: HF-analyser en transiëntenrecorder
+  static const _transientIds = {PqfEvent.idRecHf, PqfEvent.idRecTrans};
 
   @override
   Widget build(BuildContext context) {
@@ -51,14 +51,14 @@ class TransientsScreen extends StatelessWidget {
               _StatChip(
                 icon: Icons.high_quality,
                 label:
-                    '${transients.where((e) => e.typeId == 0x03FD).length} HF',
+                    '${transients.where((e) => e.typeId == PqfEvent.idRecHf).length} HF',
                 color: Colors.teal,
               ),
               const SizedBox(width: 8),
               _StatChip(
                 icon: Icons.info_outline,
                 label:
-                    '${transients.where((e) => e.typeId == 0x03F2).length} Algemeen',
+                    '${transients.where((e) => e.typeId == PqfEvent.idRecTrans).length} Recorder',
                 color: Colors.blueGrey,
               ),
             ],
@@ -142,7 +142,7 @@ class _TransientTimeline extends StatelessWidget {
       final ms = t.time.difference(start).inMilliseconds;
       final bin = (ms / binMs).floor().clamp(0, bins - 1);
       counts[bin]++;
-      if (t.typeId == 0x03FD) hfCounts[bin]++;
+      if (t.typeId == PqfEvent.idRecHf) hfCounts[bin]++;
     }
 
     final maxCount = counts.reduce((a, b) => a > b ? a : b);
@@ -256,7 +256,7 @@ class _TransientTimeline extends StatelessWidget {
               children: [
                 _dot(Colors.teal, 'HF-transiënt'),
                 const SizedBox(width: 12),
-                _dot(Colors.blueGrey, 'Algemeen'),
+                _dot(Colors.blueGrey, 'Transiëntenrecorder'),
               ],
             ),
           ],
@@ -310,7 +310,7 @@ class _TransientList extends StatelessWidget {
             rows: transients.asMap().entries.map((entry) {
               final idx = entry.key;
               final event = entry.value;
-              final isHf = event.typeId == 0x03FD;
+              final isHf = event.typeId == PqfEvent.idRecHf;
               final color = isHf ? Colors.teal : Colors.blueGrey;
 
               return DataRow(
@@ -382,7 +382,7 @@ class _TransientList extends StatelessWidget {
 class _TransientDetail {
   static void show(BuildContext context, int nr, PqfEvent event,
       MeasurementSession session, DateFormat dateFmt) {
-    final color = event.typeId == 0x03FD ? Colors.teal : Colors.blueGrey;
+    final color = event.typeId == PqfEvent.idRecHf ? Colors.teal : Colors.blueGrey;
 
     final voltSource = session.voltageData10s.isNotEmpty
         ? session.voltageData10s
@@ -411,7 +411,7 @@ class _TransientDetail {
               children: [
                 Row(
                   children: [
-                    Icon(event.typeId == 0x03FD ? Icons.bolt : Icons.info,
+                    Icon(event.typeId == PqfEvent.idRecHf ? Icons.bolt : Icons.info,
                         color: color, size: 18),
                     const SizedBox(width: 8),
                     Expanded(

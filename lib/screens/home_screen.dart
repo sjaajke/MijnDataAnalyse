@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/measurement_provider.dart';
+import '../providers/metrel_provider.dart';
 import 'comparison_screen.dart';
 import 'cos_phi_screen.dart';
 import 'en50160_screen.dart';
@@ -12,6 +13,7 @@ import 'current_screen.dart';
 import 'events_screen.dart';
 import 'frequency_screen.dart';
 import 'harmonic_screen.dart';
+import 'metrel_screen.dart';
 import 'opname_screen.dart';
 import 'overview_screen.dart';
 import 'power_screen.dart';
@@ -20,6 +22,7 @@ import 'systeemcode_screen.dart';
 import 'meter_excel_screen.dart';
 import 'standaarden_screen.dart';
 import 'voltage_screen.dart';
+import '../services/import_picker.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -104,6 +107,11 @@ class _HomeScreenState extends State<HomeScreen> {
       label: Text('Systeemcode'),
     ),
     NavigationRailDestination(
+      icon: Icon(Icons.electrical_services_outlined),
+      selectedIcon: Icon(Icons.electrical_services),
+      label: Text('Metrel'),
+    ),
+    NavigationRailDestination(
       icon: Icon(Icons.table_chart_outlined),
       selectedIcon: Icon(Icons.table_chart),
       label: Text('Energiemeter'),
@@ -130,12 +138,13 @@ class _HomeScreenState extends State<HomeScreen> {
     PowerScreen(),
     En50160Screen(),
     SysteemcodeScreen(),
+    MetrelScreen(),
     MeterExcelScreen(),
     StandaardenScreen(),
   ];
 
   Future<void> _pickFolder(BuildContext context) async {
-    final path = await FilePicker.platform.getDirectoryPath(
+    final path = await pickImportFolder(
       dialogTitle: 'Select PQF Measurement Folder',
     );
     if (path != null && context.mounted) {
@@ -144,31 +153,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _pickFpqoFile(BuildContext context) async {
-    final result = await FilePicker.platform.pickFiles(
+    final path = await pickImportFile(
       dialogTitle: 'Open Fluke FPQO bestand',
       type: FileType.custom,
       allowedExtensions: ['fpqo'],
     );
-    final path = result?.files.single.path;
     if (path != null && context.mounted) {
       await context.read<MeasurementProvider>().loadFpqoFile(path);
     }
   }
 
-  Future<void> _pickPwvxFile(BuildContext context) async {
-    final result = await FilePicker.platform.pickFiles(
-      dialogTitle: 'Open Metrel PowerView bestand',
-      type: FileType.custom,
-      allowedExtensions: ['pwvx'],
-    );
-    final path = result?.files.single.path;
-    if (path != null && context.mounted) {
-      await context.read<MeasurementProvider>().loadPwvxFile(path);
-    }
-  }
+  /// Metrel-bestanden gaan via het Metrel-scherm, dat ze ook in de
+  /// analyseschermen laadt.
+  Future<void> _pickPwvxFile(BuildContext context) => openMetrel(context);
 
   Future<void> _pickCsvFolder(BuildContext context) async {
-    final path = await FilePicker.platform.getDirectoryPath(
+    final path = await pickImportFolder(
       dialogTitle: 'Select PQ-Box 150 CSV Folder',
     );
     if (path != null && context.mounted) {
@@ -177,12 +177,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _pickDvbFile(BuildContext context) async {
-    final result = await FilePicker.platform.pickFiles(
+    final path = await pickImportFile(
       dialogTitle: 'Open Chauvin Arnoux DataView bestand',
       type: FileType.custom,
       allowedExtensions: ['dvb'],
     );
-    final path = result?.files.single.path;
     if (path != null && context.mounted) {
       await context.read<MeasurementProvider>().loadDvbFile(path);
     }
@@ -191,6 +190,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final provider = context.watch<MeasurementProvider>();
+    final metrel = context.watch<MetrelProvider>();
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -348,7 +348,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           : const SizedBox.shrink(),
                   ],
                 ),
-                if (provider.isLoading)
+                if (provider.isLoading || metrel.isLoading)
                   const Positioned.fill(
                     child: ColoredBox(
                       color: Colors.black45,
@@ -364,6 +364,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       message: provider.error!,
                       onDismiss: () =>
                           context.read<MeasurementProvider>().clearError(),
+                    ),
+                  ),
+                if (provider.error == null && metrel.error != null)
+                  Positioned(
+                    bottom: 16,
+                    left: 16,
+                    right: 16,
+                    child: _ErrorBanner(
+                      message: metrel.error!,
+                      onDismiss: () =>
+                          context.read<MetrelProvider>().clearError(),
                     ),
                   ),
               ],

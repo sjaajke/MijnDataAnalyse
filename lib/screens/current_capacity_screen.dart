@@ -20,6 +20,7 @@ import '../services/capacity_pdf.dart'
         GeneralInfo;
 import '../widgets/chart_wrapper.dart';
 import '../widgets/time_range_selector.dart';
+import '../services/import_picker.dart';
 
 class CurrentCapacityScreen extends StatefulWidget {
   const CurrentCapacityScreen({super.key});
@@ -78,8 +79,10 @@ class _CurrentCapacityScreenState extends State<CurrentCapacityScreen> {
   });
 
   Future<void> _pickImage(int index) async {
-    final result = await FilePicker.platform.pickFiles(type: FileType.image);
-    final path = result?.files.single.path;
+    final path = await pickImportFile(
+      type: FileType.image,
+      location: PickerLocation.afbeelding,
+    );
     if (path != null) {
       setState(() => _notes[index].image = File(path));
     }

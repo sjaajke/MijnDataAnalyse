@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -7,6 +6,7 @@ import '../models/measurement_data.dart';
 import '../providers/measurement_provider.dart';
 import '../widgets/chart_wrapper.dart';
 import '../widgets/time_range_selector.dart';
+import '../services/import_picker.dart';
 
 enum _Metric { voltage, current, cosPhi }
 
@@ -101,7 +101,7 @@ class _ComparisonScreenState extends State<ComparisonScreen> {
   }
 
   Future<void> _openSlot(BuildContext ctx, int slot) async {
-    final path = await FilePicker.platform.getDirectoryPath(
+    final path = await pickImportFolder(
       dialogTitle: 'Selecteer meetmap voor slot ${_slotLabels[slot]}',
     );
     if (path != null && ctx.mounted) {

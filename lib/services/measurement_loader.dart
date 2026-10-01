@@ -1,8 +1,32 @@
-import 'dart:math';
-
 import '../models/measurement_data.dart';
 import '../models/pqf_record.dart';
 import 'pqf_parser.dart';
+
+/// Structuur-ID's uit "PQ-Box Dateiformat" v1.5 (Appendix B/C) en
+/// structures.h. Alleen de ID's die deze app gebruikt staan hier.
+abstract final class PqfId {
+  // cyc.pqf — cyclische data met instelbaar interval (Nsec)
+  static const fNsec = 100; //         StructF
+  static const fExtrNsec = 101; //     StructFExtr
+  static const uNsec = 102; //         StructU
+  static const uExtrNsec = 103; //     StructUExtr (10 ms)
+  static const iNsec = 104; //         StructI
+  static const iExtrNsec = 105; //     StructIExtr (10 ms)
+  static const pNsec = 106; //         StructP
+  static const pExtrNsec = 107; //     StructPExtr
+  static const uExtr200Nsec = 111; //  StructUExtrX1 (200 ms)
+  static const iExtr200Nsec = 112; //  StructIExtr (200 ms)
+  static const px2Nsec = 115; //       StructPX2 (cos φ, …)
+  static const px3Nsec = 116; //       StructPX3 (QV1..QV3)
+  static const i1HrmNsec = 140; //     StructHarm I1
+  static const i2HrmNsec = 141; //     StructHarm I2
+  static const i3HrmNsec = 142; //     StructHarm I3
+  static const iMaxSampleNsec = 148; // StructIExtrX1 (sample-piekwaarde)
+  static const fx2Nsec = 902; //       StructF (niet median-gefilterd)
+
+  // cyc10s.pqf
+  static const f10s = 801; //          StructF
+}
 
 class MeasurementLoader {
   final PqfParser _parser = PqfParser();
@@ -21,192 +45,200 @@ class MeasurementLoader {
 
     final deviceId = header?.deviceId ?? 'Unknown Device';
 
-    // --- cyc.pqf: voltage (102), current (104), frequency (902),
-    //             harmonics (917), cos phi (115) ---
+    // --- cyc.pqf ---
     final voltageMap = <DateTime, Map<String, double>>{};
     final currentMap = <DateTime, Map<String, double>>{};
-    final freqPoints10min = <MeasurementPoint>[];
-    final harmonicPoints = <HarmonicPoint>[];
-    // New-format harmonics: separate record per phase with complex pairs
+    final activePowerMap = <DateTime, Map<String, double>>{};
+    final freqPoints = <MeasurementPoint>[];
+    final freqPointsFx2 = <MeasurementPoint>[];
+    // Harmonischen: één record per fase (140/141/142)
     final harmonicMap = <DateTime, Map<String, List<double>>>{};
     final cosPhiPoints = <CosPhiPoint>[];
-    final activePowerPoints = <MeasurementPoint>[];
     final reactivePowerPoints = <MeasurementPoint>[];
+    final reactivePowerFallback = <MeasurementPoint>[];
     final apparentPowerPoints = <MeasurementPoint>[];
 
     if (cycResult != null) {
       for (final record in cycResult.records) {
+        final p = record.payload;
         switch (record.typeId) {
-          case 0x0066: // 102 — Voltage avg
-            if (record.payload.length >= 3) {
+          case PqfId.uNsec:
+            // StructU: U1, U2, U3, UNE, U12, U23, U31, THD1..THD31 (7..13),
+            // PH1..PH31 (14..20), PST1, PST2, PST3, PST12, PST23, PST31
+            // (21..26), UU (27), UPS, UNS, UZS, U0, UREF
+            if (p.length >= 7) {
               final m = voltageMap.putIfAbsent(record.timestamp, () => {});
-              if (record.payload.length >= 10) {
-                // New format (33 floats): [?, V_L1, V_L2, V_N, V_L3, V_L12, ...]
-                m['V_L1'] = record.payload[1];
-                m['V_L2'] = record.payload[2];
-                m['V_L3'] = record.payload[4];
-                if (record.payload.length >= 6) m['V_L12'] = record.payload[5];
-              } else {
-                // Old format (≤8 floats): [V_L1, V_L2, V_L3, ?, V_L12, V_L23, V_L31]
-                m['V_L1'] = record.payload[0];
-                m['V_L2'] = record.payload[1];
-                m['V_L3'] = record.payload[2];
-                if (record.payload.length >= 6) m['V_L12'] = record.payload[4];
-                if (record.payload.length >= 7) m['V_L23'] = record.payload[5];
-                if (record.payload.length >= 8) m['V_L31'] = record.payload[6];
+              m['V_L1'] = p[0];
+              m['V_L2'] = p[1];
+              m['V_L3'] = p[2];
+              m['V_N'] = p[3];
+              m['V_L12'] = p[4];
+              m['V_L23'] = p[5];
+              m['V_L31'] = p[6];
+              if (p.length >= 10) {
+                m['V_thd_L1'] = p[7];
+                m['V_thd_L2'] = p[8];
+                m['V_thd_L3'] = p[9];
+              }
+              if (p.length >= 24) {
+                m['Pst_L1'] = p[21];
+                m['Pst_L2'] = p[22];
+                m['Pst_L3'] = p[23];
+              }
+              if (p.length >= 28) m['V_unb'] = p[27];
+            }
+          case PqfId.uExtrNsec:
+            // StructUExtr (10 ms): per waarde [TIME(2), value(1)],
+            // volgorde U1MIN, U1MAX, U2MIN, U2MAX, U3MIN, U3MAX, …
+            if (p.length >= 18) {
+              final m = voltageMap.putIfAbsent(record.timestamp, () => {});
+              _putExtremes(m, p, const ['V_L1', 'V_L2', 'V_L3'], '');
+            }
+          case PqfId.uExtr200Nsec:
+            // StructUExtrX1 (200 ms): zelfde opbouw als StructUExtr
+            if (p.length >= 18) {
+              final m = voltageMap.putIfAbsent(record.timestamp, () => {});
+              _putExtremes(m, p, const ['V_L1', 'V_L2', 'V_L3'], '200ms');
+            }
+          case PqfId.iNsec:
+            // StructI: I1, I2, I3, IS/N, IM, THD1, THD2, THD3, THDS
+            if (p.length >= 4) {
+              final m = currentMap.putIfAbsent(record.timestamp, () => {});
+              m['I_L1'] = p[0];
+              m['I_L2'] = p[1];
+              m['I_L3'] = p[2];
+              m['I_N'] = p[3];
+              if (p.length >= 9) {
+                m['I_thd_L1'] = p[5];
+                m['I_thd_L2'] = p[6];
+                m['I_thd_L3'] = p[7];
+                m['I_thd_N'] = p[8];
               }
             }
-          case 0x0067: // 103 — Voltage min/max per phase
-            if (record.payload.length >= 3) {
-              final m = voltageMap.putIfAbsent(record.timestamp, () => {});
-              if (record.payload.length >= 30) {
-                // New format (60 floats): groups of 3 [crest, 0, value]
-                // order: V_N_min, V_N_max, V_L1_min, V_L1_max, V_L2_min, V_L2_max,
-                //        V_N2_min, V_N2_max, V_L3_min, V_L3_max, ...
-                m['V_L1_min'] = record.payload[8];
-                m['V_L1_max'] = record.payload[11];
-                m['V_L2_min'] = record.payload[14];
-                m['V_L2_max'] = record.payload[17];
-                m['V_L3_min'] = record.payload[26];
-                m['V_L3_max'] = record.payload[29];
-              } else {
-                // Old format (≤8 floats): [L1_max, L2_max, L3_max, ?, L1_min, L2_min, L3_min]
-                m['V_L1_max'] = record.payload[0];
-                m['V_L2_max'] = record.payload[1];
-                m['V_L3_max'] = record.payload[2];
-                if (record.payload.length >= 7) {
-                  m['V_L1_min'] = record.payload[4];
-                  m['V_L2_min'] = record.payload[5];
-                  m['V_L3_min'] = record.payload[6];
-                }
-              }
-            }
-          case 0x0068: // 104 — Current avg
-            if (record.payload.isNotEmpty) {
+          case PqfId.iExtrNsec:
+            // StructIExtr (10 ms): I1MIN, I1MAX, …, ISMIN, ISMAX
+            if (p.length >= 24) {
               final m = currentMap.putIfAbsent(record.timestamp, () => {});
-              m['I_L1'] = record.payload[0];
-              if (record.payload.length >= 2) m['I_L2'] = record.payload[1];
-              if (record.payload.length >= 3) m['I_L3'] = record.payload[2];
-              if (record.payload.length >= 4) m['I_N'] = record.payload[3];
+              _putExtremes(m, p, const ['I_L1', 'I_L2', 'I_L3', 'I_N'], '');
             }
-          case 0x0094: // 148 — Current peak (groups of 3: [~Vpeak, 0.0, Ipeak] for L1/L2/L3/N)
-            if (record.payload.length >= 12) {
+          case PqfId.iExtr200Nsec:
+            // StructIExtr (200 ms)
+            if (p.length >= 24) {
               final m = currentMap.putIfAbsent(record.timestamp, () => {});
-              m['I_L1_max'] = record.payload[2];
-              m['I_L2_max'] = record.payload[5];
-              m['I_L3_max'] = record.payload[8];
-              m['I_N_max'] = record.payload[11];
+              _putExtremes(
+                  m, p, const ['I_L1', 'I_L2', 'I_L3', 'I_N'], '200ms');
             }
-          case 0x006d: // 109 — Current minimum (L1/L2/L3/N)
-            if (record.payload.length >= 4) {
+          case PqfId.iMaxSampleNsec:
+            // StructIExtrX1: hoogste stroom-samplewaarde (piek) per interval,
+            // per waarde [TIME(2), value(1)]: I1MAX, I2MAX, I3MAX, INMAX
+            if (p.length >= 12) {
               final m = currentMap.putIfAbsent(record.timestamp, () => {});
-              m['I_L1_min'] = record.payload[0];
-              m['I_L2_min'] = record.payload[1];
-              m['I_L3_min'] = record.payload[2];
-              m['I_N_min'] = record.payload[3];
+              m['I_L1_maxsp'] = p[2];
+              m['I_L2_maxsp'] = p[5];
+              m['I_L3_maxsp'] = p[8];
+              m['I_N_maxsp'] = p[11];
             }
-          case 0x0386: // 902 — Frequency 10min
-            if (record.payload.isNotEmpty) {
-              freqPoints10min.add(MeasurementPoint(
+          case PqfId.fNsec:
+            if (p.isNotEmpty) {
+              freqPoints.add(MeasurementPoint(
                 time: record.timestamp,
-                values: {'Hz': record.payload[0]},
+                values: {'Hz': p[0]},
               ));
             }
-          case 0x0395: // 917 — Harmonic current (avg), interleaved L1/L2/L3, h2..h31
-            // payload = 90 data floats: [h2_L1, h2_L2, h2_L3, h3_L1, ...]
-            if (record.payload.length >= 90) {
-              final l1 = <double>[], l2 = <double>[], l3 = <double>[];
-              for (int h = 0; h < 30; h++) {
-                l1.add(record.payload[h * 3]);
-                l2.add(record.payload[h * 3 + 1]);
-                l3.add(record.payload[h * 3 + 2]);
-              }
-              harmonicPoints.add(HarmonicPoint(
+          case PqfId.fx2Nsec:
+            if (p.isNotEmpty) {
+              freqPointsFx2.add(MeasurementPoint(
                 time: record.timestamp,
-                l1: l1,
-                l2: l2,
-                l3: l3,
+                values: {'Hz': p[0]},
               ));
             }
-          // New-format harmonic current: one record per phase, complex pairs
-          // Layout: [dc, h1_re, h1_im, h2_re, h2_im, ..., h25_re, h25_im] (51 floats)
-          case 0x008C: // 140 — Current harmonics L1
-          case 0x008D: // 141 — Current harmonics L2
-          case 0x008E: // 142 — Current harmonics L3
-            if (record.payload.length >= 51) {
+          case PqfId.i1HrmNsec:
+          case PqfId.i2HrmNsec:
+          case PqfId.i3HrmNsec:
+            // StructHarm: Cn[0..50]; 0 = DC, 1 = grondgolf, 2..50 = harmonischen
+            // (bij stromen in Ampère). HarmonicPoint verwacht h2..h31.
+            if (p.length >= 32) {
               final key = switch (record.typeId) {
-                0x008C => 'l1',
-                0x008D => 'l2',
+                PqfId.i1HrmNsec => 'l1',
+                PqfId.i2HrmNsec => 'l2',
                 _ => 'l3',
               };
               final m = harmonicMap.putIfAbsent(record.timestamp, () => {});
-              // Extract amplitudes h2..h31 (h26..h31 = 0 if not in record)
-              m[key] = [
-                for (int h = 2; h <= 31; h++)
-                  h <= 25
-                      ? sqrt(pow(record.payload[h * 2 - 1], 2) +
-                            pow(record.payload[h * 2], 2))
-                      : 0.0,
-              ];
+              m[key] = p.sublist(2, 32);
             }
-          case 0x0073: // 115 — Displacement power factor per phase
-            // payload[0]=cos_phi_L1, [1]=cos_phi_L2, [2]=cos_phi_L3
-            if (record.payload.length >= 3) {
+          case PqfId.px2Nsec:
+            // StructPX2: COSPHI1..3 (0..2), COSPHI (3), SINPHI (4..7),
+            // TANPHI (8..11), PG, SG, QV, PHI (12..15),
+            // COSPHV1..3 (16..18, met teken: induct. +, capac. −), COSPHV (19)
+            if (p.length >= 19) {
               cosPhiPoints.add(CosPhiPoint(
                 time: record.timestamp,
-                l1: record.payload[0],
-                l2: record.payload[1],
-                l3: record.payload[2],
+                l1: p[16],
+                l2: p[17],
+                l3: p[18],
               ));
-            }
-          case 0x006a: // Active power P (W) per phase + total
-            if (record.payload.length >= 4) {
-              final pValues = <String, double>{
-                'P_L1': record.payload[0],
-                'P_L2': record.payload[1],
-                'P_L3': record.payload[2],
-                'P_total': record.payload[3],
-              };
-              // New format (≥18 floats): power factor per phase at indices 15-17
-              if (record.payload.length >= 18) {
-                pValues['PF_L1'] = record.payload[15];
-                pValues['PF_L2'] = record.payload[16];
-                pValues['PF_L3'] = record.payload[17];
-              }
-              activePowerPoints.add(MeasurementPoint(
+            } else if (p.length >= 3) {
+              cosPhiPoints.add(CosPhiPoint(
                 time: record.timestamp,
-                values: pValues,
+                l1: p[0],
+                l2: p[1],
+                l3: p[2],
               ));
-              // S = |P / PF| per phase
-              if (record.payload.length >= 18) {
-                final pf1 = record.payload[15];
-                final pf2 = record.payload[16];
-                final pf3 = record.payload[17];
-                if (pf1 != 0 && pf2 != 0 && pf3 != 0) {
-                  final sL1 = (record.payload[0] / pf1).abs();
-                  final sL2 = (record.payload[1] / pf2).abs();
-                  final sL3 = (record.payload[2] / pf3).abs();
-                  apparentPowerPoints.add(MeasurementPoint(
-                    time: record.timestamp,
-                    values: {
-                      'S_L1': sL1,
-                      'S_L2': sL2,
-                      'S_L3': sL3,
-                      'S_total': sL1 + sL2 + sL3,
-                    },
-                  ));
-                }
+            }
+          case PqfId.pNsec:
+            // StructP: P1, P2, P3, P (0..3), S1, S2, S3, S (4..7),
+            // Q1, Q2, Q3, Q (8..11), PH1..3 (12..14), PF1, PF2, PF3, PF (15..18)
+            if (p.length >= 4) {
+              final m = activePowerMap.putIfAbsent(record.timestamp, () => {});
+              m['P_L1'] = p[0];
+              m['P_L2'] = p[1];
+              m['P_L3'] = p[2];
+              m['P_total'] = p[3];
+              if (p.length >= 19) {
+                m['PF_L1'] = p[15];
+                m['PF_L2'] = p[16];
+                m['PF_L3'] = p[17];
+                m['PF_total'] = p[18];
               }
             }
-          case 0x0074: // Reactive power Q (VAr) per phase
-            if (record.payload.length >= 3) {
+            if (p.length >= 12) {
+              apparentPowerPoints.add(MeasurementPoint(
+                time: record.timestamp,
+                values: {
+                  'S_L1': p[4],
+                  'S_L2': p[5],
+                  'S_L3': p[6],
+                  'S_total': p[7],
+                },
+              ));
+              reactivePowerFallback.add(MeasurementPoint(
+                time: record.timestamp,
+                values: {
+                  'Q_L1': p[8],
+                  'Q_L2': p[9],
+                  'Q_L3': p[10],
+                  'Q_total': p[11],
+                },
+              ));
+            }
+          case PqfId.pExtrNsec:
+            // StructPExtr: P1MIN, P1MAX, …, PMIN, PMAX
+            if (p.length >= 24) {
+              final m = activePowerMap.putIfAbsent(record.timestamp, () => {});
+              _putExtremes(
+                  m, p, const ['P_L1', 'P_L2', 'P_L3', 'P_total'], '');
+            }
+          case PqfId.px3Nsec:
+            // StructPX3: QV1..QV3 — grondgolf-verschuivingsblindvermogen,
+            // met teken (in tegenstelling tot Q uit StructP).
+            if (p.length >= 3) {
               reactivePowerPoints.add(MeasurementPoint(
                 time: record.timestamp,
                 values: {
-                  'Q_L1': record.payload[0],
-                  'Q_L2': record.payload[1],
-                  'Q_L3': record.payload[2],
-                  'Q_total': record.payload[0] + record.payload[1] + record.payload[2],
+                  'Q_L1': p[0],
+                  'Q_L2': p[1],
+                  'Q_L3': p[2],
+                  'Q_total': p[0] + p[1] + p[2],
                 },
               ));
             }
@@ -214,7 +246,8 @@ class MeasurementLoader {
       }
     }
 
-    // Convert new-format harmonic map to HarmonicPoints (merged with old-format)
+    // Harmonischen samenvoegen tot HarmonicPoints (alle drie fasen nodig)
+    final harmonicPoints = <HarmonicPoint>[];
     for (final e in harmonicMap.entries) {
       final l1 = e.value['l1'];
       final l2 = e.value['l2'];
@@ -230,144 +263,106 @@ class MeasurementLoader {
     }
     harmonicPoints.sort((a, b) => a.time.compareTo(b.time));
 
-    // Convert voltage/current maps to sorted lists
-    final voltagePoints = voltageMap.entries
-        .map((e) => MeasurementPoint(time: e.key, values: e.value))
-        .toList()
-      ..sort((a, b) => a.time.compareTo(b.time));
+    final voltagePoints = _mapToPoints(voltageMap);
+    final currentPoints = _mapToPoints(currentMap);
+    final activePowerPoints = _mapToPoints(activePowerMap);
 
-    final currentPoints = currentMap.entries
-        .map((e) => MeasurementPoint(time: e.key, values: e.value))
-        .toList()
-      ..sort((a, b) => a.time.compareTo(b.time));
+    // Voorkeur: gemedianfilterde netfrequentie (100), anders FX2 (902).
+    final freqPointsNsec = freqPoints.isNotEmpty ? freqPoints : freqPointsFx2;
 
-    // --- cyc10s.pqf: frequency 10s, and optionally voltage/current 10s ---
+    // --- cyc10s.pqf: frequentie 10 s (Appendix C: alleen 800/801) ---
     final freqPoints10s = <MeasurementPoint>[];
-    final voltageMap10s = <DateTime, Map<String, double>>{};
-    final currentPoints10s = <MeasurementPoint>[];
 
     if (cyc10sResult != null) {
       for (final record in cyc10sResult.records) {
-        switch (record.typeId) {
-          case 0x0321: // Frequency 10s
-            if (record.payload.isNotEmpty) {
-              freqPoints10s.add(MeasurementPoint(
-                time: record.timestamp,
-                values: {'Hz': record.payload[0]},
-              ));
-            }
-          case 0x0066: // Voltage 10s avg
-            if (record.payload.length >= 3) {
-              final m = voltageMap10s.putIfAbsent(record.timestamp, () => {});
-              if (record.payload.length >= 10) {
-                m['V_L1'] = record.payload[1];
-                m['V_L2'] = record.payload[2];
-                m['V_L3'] = record.payload[4];
-                if (record.payload.length >= 6) m['V_L12'] = record.payload[5];
-              } else {
-                m['V_L1'] = record.payload[0];
-                m['V_L2'] = record.payload[1];
-                m['V_L3'] = record.payload[2];
-                if (record.payload.length >= 6) m['V_L12'] = record.payload[4];
-                if (record.payload.length >= 7) m['V_L23'] = record.payload[5];
-                if (record.payload.length >= 8) m['V_L31'] = record.payload[6];
-              }
-            }
-          case 0x0067: // Voltage 10s max/min
-            if (record.payload.length >= 3) {
-              final m = voltageMap10s.putIfAbsent(record.timestamp, () => {});
-              if (record.payload.length >= 30) {
-                m['V_L1_min'] = record.payload[8];
-                m['V_L1_max'] = record.payload[11];
-                m['V_L2_min'] = record.payload[14];
-                m['V_L2_max'] = record.payload[17];
-                m['V_L3_min'] = record.payload[26];
-                m['V_L3_max'] = record.payload[29];
-              } else {
-                m['V_L1_max'] = record.payload[0];
-                m['V_L2_max'] = record.payload[1];
-                m['V_L3_max'] = record.payload[2];
-                if (record.payload.length >= 7) {
-                  m['V_L1_min'] = record.payload[4];
-                  m['V_L2_min'] = record.payload[5];
-                  m['V_L3_min'] = record.payload[6];
-                }
-              }
-            }
-          case 0x0068: // Current 10s (same format as cyc.pqf)
-            if (record.payload.isNotEmpty) {
-              currentPoints10s.add(MeasurementPoint(
-                time: record.timestamp,
-                values: {
-                  'I_L1': record.payload[0],
-                  if (record.payload.length >= 2) 'I_L2': record.payload[1],
-                  if (record.payload.length >= 3) 'I_L3': record.payload[2],
-                  if (record.payload.length >= 4) 'I_N': record.payload[3],
-                },
-              ));
-            }
+        if (record.typeId == PqfId.f10s && record.payload.isNotEmpty) {
+          freqPoints10s.add(MeasurementPoint(
+            time: record.timestamp,
+            values: {'Hz': record.payload[0]},
+          ));
         }
       }
     }
 
-    final voltagePoints10s = voltageMap10s.entries
-        .map((e) => MeasurementPoint(time: e.key, values: e.value))
-        .toList()
-      ..sort((a, b) => a.time.compareTo(b.time));
-
-    // Voor PQBox150: cyc10s.pqf bevat geen stroomdata; cyc.pqf heeft al 10-sec stroom.
-    final currentPoints10sResolved =
-        currentPoints10s.isNotEmpty ? currentPoints10s : currentPoints;
-
     // --- event.pqf: events ---
+    // Structuur: ID, Size, TIME, 4-byte waarde (float32/uint32, event-afhankelijk)
     final events = <PqfEvent>[];
 
     if (eventResult != null) {
       for (final record in eventResult.records) {
-        switch (record.typeId) {
-          case 0x0084:
-          case 0x0085:
-          case 0x002F:
-          case 0x002D:
-          case 0x03F2:
-          case 0x03FD:
-            events.add(PqfEvent(time: record.timestamp, typeId: record.typeId));
-        }
+        if (!PqfEvent.isRelevant(record.typeId)) continue;
+        events.add(PqfEvent(
+          time: record.timestamp,
+          typeId: record.typeId,
+          value: record.payload.isNotEmpty ? record.payload[0] : null,
+        ));
       }
+      events.sort((a, b) => a.time.compareTo(b.time));
     }
 
     // Determine overall time range
     final allTimes = [
       ...voltagePoints.map((p) => p.time),
       ...currentPoints.map((p) => p.time),
-      ...freqPoints10min.map((p) => p.time),
+      ...freqPointsNsec.map((p) => p.time),
       ...freqPoints10s.map((p) => p.time),
       ...events.map((e) => e.time),
     ];
 
     final startTime = allTimes.isNotEmpty
         ? allTimes.reduce((a, b) => a.isBefore(b) ? a : b)
-        : DateTime.now();
+        : (header?.startTimestamp ?? DateTime.now());
     final endTime = allTimes.isNotEmpty
         ? allTimes.reduce((a, b) => a.isAfter(b) ? a : b)
-        : DateTime.now();
+        : startTime;
 
     return MeasurementSession(
       deviceId: deviceId,
       startTime: startTime,
       endTime: endTime,
       voltageData: voltagePoints,
-      voltageData10s: voltagePoints10s,
       currentData: currentPoints,
-      currentData10s: currentPoints10sResolved,
-      frequencyData10min: freqPoints10min,
+      // cyc.pqf bevat de stroom al op het ingestelde (vaak 10 s) interval;
+      // cyc10s.pqf bevat geen stroomdata.
+      currentData10s: currentPoints,
+      frequencyData10min: freqPointsNsec,
       frequencyData10s: freqPoints10s,
       events: events,
       harmonicCurrentData: harmonicPoints,
       cosPhiData: cosPhiPoints,
       activePowerData: activePowerPoints,
-      reactivePowerData: reactivePowerPoints,
+      reactivePowerData: reactivePowerPoints.isNotEmpty
+          ? reactivePowerPoints
+          : reactivePowerFallback,
       apparentPowerData: apparentPowerPoints,
     );
+  }
+
+  /// Leest min/max-paren uit een extreme-waardestructuur (StructUExtr,
+  /// StructIExtr, StructPExtr, …). Elke waarde wordt voorafgegaan door een
+  /// eigen TIME-veld (8 bytes = 2 floats), dus per kanaal:
+  /// [TIME, MIN, TIME, MAX] → MIN op index 6k+2, MAX op index 6k+5.
+  /// [suffix] wordt achter "_min"/"_max" geplakt (bv. "200ms").
+  static void _putExtremes(
+    Map<String, double> m,
+    List<double> p,
+    List<String> keys,
+    String suffix,
+  ) {
+    for (int k = 0; k < keys.length; k++) {
+      final minIdx = k * 6 + 2;
+      final maxIdx = k * 6 + 5;
+      if (maxIdx >= p.length) break;
+      m['${keys[k]}_min$suffix'] = p[minIdx];
+      m['${keys[k]}_max$suffix'] = p[maxIdx];
+    }
+  }
+
+  static List<MeasurementPoint> _mapToPoints(
+      Map<DateTime, Map<String, double>> map) {
+    return map.entries
+        .map((e) => MeasurementPoint(time: e.key, values: e.value))
+        .toList()
+      ..sort((a, b) => a.time.compareTo(b.time));
   }
 }

@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import '../providers/bedrijfsgegevens_provider.dart';
 import 'capacity_pdf.dart' show ChartPoint;
 import 'pdf_branding.dart';
+import 'import_picker.dart';
 
 // ── Data containers ──────────────────────────────────────────────────────────
 
@@ -232,7 +233,7 @@ Future<void> exportOpnamePdf({
   final fileName =
       'opname_${DateFormat('yyyyMMdd_HHmm').format(now)}.pdf';
 
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSaveFile(
     dialogTitle: 'Sla opname-rapport op',
     fileName: fileName,
     type: FileType.custom,

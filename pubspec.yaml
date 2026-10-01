@@ -41,6 +41,7 @@ dependencies:
   excel: ^4.0.6
   http: ^1.2.0
   shared_preferences: ^2.3.2
+  sqlite3: ^3.5.2
 
 dev_dependencies:
   flutter_test:
@@ -64,6 +65,12 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    # Meetcatalogus uit de Metrel Power SDK (Power.SDK.PowerDisplay 2.1.0,
+    # build/Data/powerdisplay.db). Vertaalt descriptors in .pwvx-records naar
+    # grootheid, kanaal, eenheid en aggregatie.
+    - assets/metrel/powerdisplay.db
 
   # To add assets to your application, add an assets section, like this:
   # assets:

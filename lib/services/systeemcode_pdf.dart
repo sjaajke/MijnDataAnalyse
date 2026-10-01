@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import '../providers/bedrijfsgegevens_provider.dart';
 import 'pdf_branding.dart';
 import 'systeemcode_analysis.dart';
+import 'import_picker.dart';
 
 Future<void> exportSysteemcodePdf({
   required BuildContext context,
@@ -407,7 +408,7 @@ Future<void> exportSysteemcodePdf({
 
   if (!context.mounted) return;
 
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSaveFile(
     dialogTitle: 'Sla systeemcode rapport op',
     fileName: fileName,
     type: FileType.custom,

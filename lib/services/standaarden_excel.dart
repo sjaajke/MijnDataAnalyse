@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../models/standaard.dart';
 import '../providers/standaarden_provider.dart';
+import 'import_picker.dart';
 
 Future<void> exportStandaardenExcel({
   required BuildContext context,
@@ -38,7 +39,7 @@ Future<void> exportStandaardenExcel({
 
   if (!context.mounted) return;
 
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSaveFile(
     dialogTitle: 'Sla standaarden op',
     fileName: fileName,
     type: FileType.custom,
@@ -59,12 +60,11 @@ Future<void> exportStandaardenExcel({
 }
 
 Future<void> importStandaardenExcel({required BuildContext context}) async {
-  final result = await FilePicker.platform.pickFiles(
+  final path = await pickImportFile(
     dialogTitle: 'Open standaarden Excel-bestand',
     type: FileType.custom,
     allowedExtensions: ['xlsx'],
   );
-  final path = result?.files.single.path;
   if (path == null) return;
 
   final bytes = await File(path).readAsBytes();

@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../providers/bedrijfsgegevens_provider.dart';
 import 'en50160_analysis.dart';
 import 'pdf_branding.dart';
+import 'import_picker.dart';
 
 Future<void> exportEn50160Pdf({
   required BuildContext context,
@@ -181,7 +182,7 @@ Future<void> exportEn50160Pdf({
   final fileName =
       'en50160_${DateFormat('yyyyMMdd_HHmm').format(now)}.pdf';
 
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSaveFile(
     dialogTitle: 'Sla EN 50160 rapport op',
     fileName: fileName,
     type: FileType.custom,

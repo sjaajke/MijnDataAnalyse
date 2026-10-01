@@ -1,10 +1,10 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../services/pqbox_connector.dart';
+import '../services/import_picker.dart';
 
 class PQBoxDownloadScreen extends StatelessWidget {
   const PQBoxDownloadScreen({super.key});
@@ -358,8 +358,10 @@ class _UsbTab extends StatelessWidget {
             path: conn.sourcePath,
             icon: Icons.usb,
             onPick: () async {
-              final path = await FilePicker.platform.getDirectoryPath(
+              final path = await pickImportFolder(
                 dialogTitle: 'Selecteer PQBox-map (USB-schijf)',
+                location: PickerLocation.pqboxBron,
+                rememberParent: false,
               );
               if (path != null) {
                 conn.sourcePath = path;
@@ -373,8 +375,10 @@ class _UsbTab extends StatelessWidget {
             path: conn.destinationPath,
             icon: Icons.folder,
             onPick: () async {
-              final path = await FilePicker.platform.getDirectoryPath(
+              final path = await pickImportFolder(
                 dialogTitle: 'Selecteer doelmap',
+                location: PickerLocation.pqboxDoel,
+                rememberParent: false,
               );
               if (path != null) {
                 conn.destinationPath = path;

@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../providers/bedrijfsgegevens_provider.dart';
 import 'pdf_branding.dart';
+import 'import_picker.dart';
 
 /// Eén datapunt voor de grafiek: x in uren na start, y in ampère.
 class ChartPoint {
@@ -431,7 +432,7 @@ Future<void> exportCapacityPdf({
   final fileName =
       'capaciteitsrapport_${DateFormat('yyyyMMdd_HHmm').format(now)}.pdf';
 
-  final savePath = await FilePicker.platform.saveFile(
+  final savePath = await pickSaveFile(
     dialogTitle: 'Sla PDF rapport op',
     fileName: fileName,
     type: FileType.custom,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'providers/bedrijfsgegevens_provider.dart';
 import 'providers/measurement_provider.dart';
+import 'providers/metrel_provider.dart';
 import 'providers/standaarden_provider.dart';
 import 'screens/home_screen.dart';
 
@@ -17,6 +18,7 @@ class PqAnalyseApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => MeasurementProvider()),
+        ChangeNotifierProvider(create: (_) => MetrelProvider()),
         ChangeNotifierProvider(create: (_) => StandaardenProvider()),
         ChangeNotifierProvider(create: (_) => BedrijfsgegevensProvider()),
       ],

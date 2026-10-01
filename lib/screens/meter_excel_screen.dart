@@ -14,6 +14,7 @@ import '../providers/measurement_provider.dart';
 import '../services/energy_analysis_parser.dart';
 import '../services/xlsx_meter_parser.dart';
 import '../widgets/time_range_selector.dart';
+import '../services/import_picker.dart';
 
 // ── Data definitions ──────────────────────────────────────────────────────────
 
@@ -216,7 +217,6 @@ class _MeterExcelScreenState extends State<MeterExcelScreen> {
   bool _loading = false;
   String? _error;
   List<String> _fileNames = [];
-  String? _lastDirectory;
   double _filterMinMs = 0;
   double _filterMaxMs = double.infinity;
 
@@ -331,22 +331,15 @@ class _MeterExcelScreenState extends State<MeterExcelScreen> {
   // ── File picking ────────────────────────────────────────────────────────────
 
   Future<void> _pickEaFile({bool replace = true}) async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await pickImportFiles(
       dialogTitle: replace
           ? 'Open Energie Analyse Excel-export'
           : 'Voeg Energie Analyse bestand toe',
       type: FileType.custom,
       allowedExtensions: ['xlsx'],
       allowMultiple: true,
-      initialDirectory: _lastDirectory,
     );
     if (result == null || result.files.isEmpty) return;
-
-    final firstPath = result.files.first.path;
-    if (firstPath != null) {
-      final sep = firstPath.lastIndexOf('/');
-      if (sep > 0) _lastDirectory = firstPath.substring(0, sep);
-    }
 
     setState(() { _loading = true; _error = null; });
     try {
@@ -458,22 +451,15 @@ class _MeterExcelScreenState extends State<MeterExcelScreen> {
   }
 
   Future<void> _pickFile({bool replace = true}) async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await pickImportFiles(
       dialogTitle: replace
           ? 'Open energiemeter Excel-export'
           : 'Voeg Excel-export toe',
       type: FileType.custom,
       allowedExtensions: ['xlsx'],
       allowMultiple: true,
-      initialDirectory: _lastDirectory,
     );
     if (result == null || result.files.isEmpty) return;
-
-    final firstPath = result.files.first.path;
-    if (firstPath != null) {
-      final sep = firstPath.lastIndexOf('/');
-      if (sep > 0) _lastDirectory = firstPath.substring(0, sep);
-    }
 
     setState(() { _loading = true; _error = null; });
 
