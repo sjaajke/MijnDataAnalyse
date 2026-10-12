@@ -7,7 +7,72 @@ import '../providers/measurement_provider.dart';
 import '../widgets/chart_wrapper.dart';
 import '../widgets/time_range_selector.dart';
 
-enum _CurrentView { avg, max, min }
+enum _CurrentView { avg, maxSample, max, max200ms, min }
+
+typedef _ViewSpec = ({
+  _CurrentView view,
+  String suffix,
+  String label,
+  double width,
+  double opacity,
+  List<int>? dash,
+});
+
+/// Weergaven per bron. Bij A-Eberle (PQ-Box, "PQ-Box Dateiformat" v1.5 /
+/// structures.h) volgen de suffixen de velden uit MeasurementLoader en
+/// PqBoxCsvParser:
+///   ''          StructI (ID 104)             — I TRMS (intervalwaarde)
+///   '_maxsp'    StructIExtrX1 (ID 148)       — hoogste 40/20 kHz-sample
+///   '_max'      StructIExtr 10 ms (ID 105)   — I TRMS max
+///   '_max200ms' StructIExtr 200 ms (ID 112)  — I eff max
+///   '_min'      StructIExtr 10 ms (ID 105)   — I TRMS min
+List<_ViewSpec> _viewSpecs(bool aEberle) => aEberle
+    ? const [
+        (view: _CurrentView.avg,       suffix: '',          label: 'I TRMS',               width: 1.5, opacity: 1.0,  dash: null),
+        (view: _CurrentView.maxSample, suffix: '_maxsp',    label: 'I eff max (meetpunt)', width: 1.2, opacity: 0.6,  dash: [2, 3]),
+        (view: _CurrentView.max,       suffix: '_max',      label: 'I TRMS max (10 ms)',   width: 2.0, opacity: 0.85, dash: null),
+        (view: _CurrentView.max200ms,  suffix: '_max200ms', label: 'I eff max (200 ms)',   width: 1.5, opacity: 0.7,  dash: [6, 3]),
+        (view: _CurrentView.min,       suffix: '_min',      label: 'I TRMS min (10 ms)',   width: 1.0, opacity: 0.5,  dash: null),
+      ]
+    : const [
+        (view: _CurrentView.avg, suffix: '',     label: 'Gemiddeld', width: 1.5, opacity: 1.0,  dash: null),
+        (view: _CurrentView.max, suffix: '_max', label: 'Piek',      width: 2.0, opacity: 0.85, dash: null),
+        (view: _CurrentView.min, suffix: '_min', label: 'Minimum',   width: 1.0, opacity: 0.5,  dash: null),
+      ];
+
+/// A-Eberle-data herkennen aan de 200 ms- of samplewaarden, die alleen de
+/// PQ-Box levert (zowel uit .pqf als uit de CSV-export).
+bool _isAEberle(List<MeasurementPoint> data) => data.any((p) => p.values.keys
+    .any((k) => k.endsWith('_max200ms') || k.endsWith('_maxsp')));
+
+bool _hasSuffix(List<MeasurementPoint> data, String suffix) => data.any((p) =>
+    const ['L1', 'L2', 'L3', 'N'].any((ph) => p.values.containsKey('I_$ph$suffix')));
+
+String _labelFor(List<_ViewSpec> specs, _CurrentView view) =>
+    specs.firstWhere((v) => v.view == view).label;
+
+/// Chips om weergaven aan/uit te zetten; minstens één blijft actief.
+List<Widget> _viewChips({
+  required List<_ViewSpec> specs,
+  required Set<_CurrentView> active,
+  required Set<_CurrentView> available,
+  required void Function(VoidCallback) setState,
+}) => [
+      for (final v in specs)
+        FilterChip(
+          label: Text(v.label),
+          selected: active.contains(v.view),
+          onSelected: available.contains(v.view)
+              ? (on) => setState(() {
+                    if (on) {
+                      active.add(v.view);
+                    } else if (active.length > 1) {
+                      active.remove(v.view);
+                    }
+                  })
+              : null,
+        ),
+    ];
 
 class CurrentScreen extends StatefulWidget {
   const CurrentScreen({super.key});
@@ -109,12 +174,6 @@ class _CurrentScreenState extends State<CurrentScreen> {
     }
   }
 
-  static String _labelFor(_CurrentView v) => switch (v) {
-        _CurrentView.avg => 'gemiddeld',
-        _CurrentView.max => 'piek',
-        _CurrentView.min => 'minimum',
-      };
-
   @override
   Widget build(BuildContext context) {
     final session = context.watch<MeasurementProvider>().session;
@@ -142,8 +201,16 @@ class _CurrentScreenState extends State<CurrentScreen> {
       );
     }
 
-    // Check whether max/min sub-records are available (FPQO only)
-    final hasMaxMin = rawData.any((p) => p.values.containsKey('I_L1_max'));
+    // A-Eberle: vijf stroomgrootheden; overige bronnen: gem./piek/min.
+    final aEberle = _isAEberle(rawData);
+    final specs = _viewSpecs(aEberle);
+    final available = {
+      for (final v in specs)
+        if (_hasSuffix(rawData, v.suffix)) v.view
+    };
+    // Weergaven die bij deze bron niet bestaan niet actief laten staan.
+    _activeViews.retainWhere((v) => specs.any((s) => s.view == v));
+    if (_activeViews.isEmpty) _activeViews.add(_CurrentView.avg);
 
     final totalMinMs = rawData.first.time.millisecondsSinceEpoch.toDouble();
     final totalMaxMs = rawData.last.time.millisecondsSinceEpoch.toDouble();
@@ -161,12 +228,6 @@ class _CurrentScreenState extends State<CurrentScreen> {
       ('L3', Colors.blue),
       ('N',  Colors.grey),
     ];
-    // (view, suffix, lijnbreedte, opaciteit)
-    const viewStyle = [
-      (_CurrentView.avg, '',     1.5, 1.0),
-      (_CurrentView.max, '_max', 2.0, 0.85),
-      (_CurrentView.min, '_min', 1.0, 0.5),
-    ];
 
     List<FlSpot> spotsFor(String phase, String suffix) => sampled
         .where((p) => p.values.containsKey('I_$phase$suffix'))
@@ -182,17 +243,18 @@ class _CurrentScreenState extends State<CurrentScreen> {
 
     for (final (phase, baseColor) in phaseConfig) {
       if (!_visiblePhases.contains(phase)) continue;
-      for (final (view, suffix, width, opacity) in viewStyle) {
-        if (!_activeViews.contains(view)) continue;
-        final spots = spotsFor(phase, suffix);
+      for (final v in specs) {
+        if (!_activeViews.contains(v.view)) continue;
+        final spots = spotsFor(phase, v.suffix);
         if (spots.isEmpty) continue;
-        final color = baseColor.withValues(alpha: opacity);
-        seriesMeta.add((phase, view, color));
+        final color = baseColor.withValues(alpha: v.opacity);
+        seriesMeta.add((phase, v.view, color));
         lineBarsData.add(LineChartBarData(
           spots: spots,
           isCurved: false,
           color: color,
-          barWidth: width,
+          barWidth: v.width,
+          dashArray: v.dash,
           dotData: const FlDotData(show: false),
         ));
       }
@@ -263,7 +325,7 @@ class _CurrentScreenState extends State<CurrentScreen> {
             final idx = s.barIndex.clamp(0, seriesMeta.length - 1);
             final (phase, view, color) = seriesMeta[idx];
             return LineTooltipItem(
-              '$phase ${_labelFor(view)}: ${s.y.toStringAsFixed(2)} A',
+              '$phase ${_labelFor(specs, view)}: ${s.y.toStringAsFixed(2)} A',
               TextStyle(color: color, fontSize: 11),
             );
           }).toList(),
@@ -271,210 +333,182 @@ class _CurrentScreenState extends State<CurrentScreen> {
       ),
     );
 
-    final viewLabels = _activeViews
-        .map(_labelFor)
+    final viewLabels = specs
+        .where((v) => _activeViews.contains(v.view))
+        .map((v) => v.label)
         .join(' + ');
 
-    return Column(
-      children: [
-        // Toolbar: aantekening + grafiek toevoegen + resolutie-toggle
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              OutlinedButton.icon(
-                onPressed: _openNoteDialog,
-                icon: Icon(_noteTitle == null ? Icons.note_add_outlined : Icons.edit_note),
-                label: Text(_noteTitle == null ? 'Aantekening' : 'Bewerken'),
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: _showExtraChart
-                    ? null
-                    : () => setState(() => _showExtraChart = true),
-                icon: const Icon(Icons.add_chart),
-                label: const Text('Grafiek toevoegen'),
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              ),
-              const SizedBox(width: 12),
-              SegmentedButton<bool>(
-                segments: [
-                  const ButtonSegment(value: false, label: Text('10 min')),
-                  ButtonSegment(
-                    value: true,
-                    label: const Text('10 sec'),
-                    enabled: has10s,
-                  ),
-                ],
-                selected: {_use10s},
-                onSelectionChanged: (val) =>
-                    setState(() => _use10s = val.first),
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              ),
-            ],
-          ),
-        ),
-
-        // Fase- en view-toggles
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Wrap(
-            spacing: 6,
-            runSpacing: 4,
-            children: [
-              for (final (phase, color) in phaseConfig)
-                FilterChip(
-                  label: Text(phase),
-                  selected: _visiblePhases.contains(phase),
-                  selectedColor: color.withValues(alpha: 0.25),
-                  checkmarkColor: color,
-                  side: BorderSide(
-                    color: _visiblePhases.contains(phase)
-                        ? color
-                        : Colors.grey.shade600,
-                  ),
-                  onSelected: (on) => setState(() {
-                    if (on) {
-                      _visiblePhases.add(phase);
-                    } else if (_visiblePhases.length > 1) {
-                      _visiblePhases.remove(phase);
-                    }
-                  }),
-                ),
-              const SizedBox(width: 8),
-              FilterChip(
-                label: const Text('Gemiddeld'),
-                selected: _activeViews.contains(_CurrentView.avg),
-                onSelected: (on) => setState(() {
-                  if (on) {
-                    _activeViews.add(_CurrentView.avg);
-                  } else if (_activeViews.length > 1) {
-                    _activeViews.remove(_CurrentView.avg);
-                  }
-                }),
-              ),
-              FilterChip(
-                label: const Text('Piek'),
-                selected: _activeViews.contains(_CurrentView.max),
-                onSelected: hasMaxMin
-                    ? (on) => setState(() {
-                          if (on) {
-                            _activeViews.add(_CurrentView.max);
-                          } else if (_activeViews.length > 1) {
-                            _activeViews.remove(_CurrentView.max);
-                          }
-                        })
-                    : null,
-              ),
-              FilterChip(
-                label: const Text('Minimum'),
-                selected: _activeViews.contains(_CurrentView.min),
-                onSelected: hasMaxMin
-                    ? (on) => setState(() {
-                          if (on) {
-                            _activeViews.add(_CurrentView.min);
-                          } else if (_activeViews.length > 1) {
-                            _activeViews.remove(_CurrentView.min);
-                          }
-                        })
-                    : null,
-              ),
-            ],
-          ),
-        ),
-
-        TimeRangeSelector(
-          totalMinMs: totalMinMs,
-          totalMaxMs: totalMaxMs,
-          filterMinMs: fMin,
-          filterMaxMs: fMax,
-          onChanged: (s, e) => setState(() {
-            _filterMinMs = s;
-            _filterMaxMs = e;
-          }),
-          onReset: () => setState(() {
-            _filterMinMs = totalMinMs;
-            _filterMaxMs = totalMaxMs;
-          }),
-        ),
-        ChartWrapper(
-          title: 'Stroom ($resolution) — $viewLabels',
-          chartData: chartData,
-          height: 420,
-          legendItems: [
-            for (final (phase, view, color) in seriesMeta)
-              LegendItem(
-                label: _activeViews.length > 1
-                    ? '$phase ${_labelFor(view)}'
-                    : phase,
-                color: color,
-              ),
-          ],
-        ),
-
-        // Aantekening
-        if (_noteTitle != null || _noteText != null)
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          // Toolbar: aantekening + grafiek toevoegen + resolutie-toggle
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Theme.of(context).dividerColor),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.notes, size: 18),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_noteTitle != null)
-                          Text(_noteTitle!,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 13)),
-                        if (_noteTitle != null && _noteText != null)
-                          const SizedBox(height: 4),
-                        if (_noteText != null)
-                          Text(_noteText!,
-                              style: const TextStyle(fontSize: 12)),
-                      ],
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _openNoteDialog,
+                  icon: Icon(_noteTitle == null ? Icons.note_add_outlined : Icons.edit_note),
+                  label: Text(_noteTitle == null ? 'Aantekening' : 'Bewerken'),
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: _showExtraChart
+                      ? null
+                      : () => setState(() => _showExtraChart = true),
+                  icon: const Icon(Icons.add_chart),
+                  label: const Text('Grafiek toevoegen'),
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                ),
+                const SizedBox(width: 12),
+                SegmentedButton<bool>(
+                  segments: [
+                    const ButtonSegment(value: false, label: Text('10 min')),
+                    ButtonSegment(
+                      value: true,
+                      label: const Text('10 sec'),
+                      enabled: has10s,
                     ),
-                  ),
-                  IconButton(
-                    tooltip: 'Bewerken',
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                    onPressed: _openNoteDialog,
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  IconButton(
-                    tooltip: 'Verwijderen',
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    onPressed: () =>
-                        setState(() { _noteTitle = null; _noteText = null; }),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ],
-              ),
+                  ],
+                  selected: {_use10s},
+                  onSelectionChanged: (val) =>
+                      setState(() => _use10s = val.first),
+                  style: const ButtonStyle(visualDensity: VisualDensity.compact),
+                ),
+              ],
             ),
           ),
 
-        // Extra grafiek
-        if (_showExtraChart)
-          _ExtraCurrentChart(
-            rawData: rawData,
+          // Fase- en view-toggles
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (final (phase, color) in phaseConfig)
+                  FilterChip(
+                    label: Text(phase),
+                    selected: _visiblePhases.contains(phase),
+                    selectedColor: color.withValues(alpha: 0.25),
+                    checkmarkColor: color,
+                    side: BorderSide(
+                      color: _visiblePhases.contains(phase)
+                          ? color
+                          : Colors.grey.shade600,
+                    ),
+                    onSelected: (on) => setState(() {
+                      if (on) {
+                        _visiblePhases.add(phase);
+                      } else if (_visiblePhases.length > 1) {
+                        _visiblePhases.remove(phase);
+                      }
+                    }),
+                  ),
+                const SizedBox(width: 8),
+                ..._viewChips(
+                  specs: specs,
+                  active: _activeViews,
+                  available: available,
+                  setState: setState,
+                ),
+              ],
+            ),
+          ),
+
+          TimeRangeSelector(
             totalMinMs: totalMinMs,
             totalMaxMs: totalMaxMs,
-            hasMaxMin: hasMaxMin,
-            onClose: () => setState(() => _showExtraChart = false),
+            filterMinMs: fMin,
+            filterMaxMs: fMax,
+            onChanged: (s, e) => setState(() {
+              _filterMinMs = s;
+              _filterMaxMs = e;
+            }),
+            onReset: () => setState(() {
+              _filterMinMs = totalMinMs;
+              _filterMaxMs = totalMaxMs;
+            }),
           ),
-      ],
+          ChartWrapper(
+            title: 'Stroom ($resolution) — $viewLabels',
+            chartData: chartData,
+            height: 420,
+            legendItems: [
+              for (final (phase, view, color) in seriesMeta)
+                LegendItem(
+                  label: _activeViews.length > 1
+                      ? '$phase ${_labelFor(specs, view)}'
+                      : phase,
+                  color: color,
+                ),
+            ],
+          ),
+
+          // Aantekening
+          if (_noteTitle != null || _noteText != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Theme.of(context).dividerColor),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.notes, size: 18),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (_noteTitle != null)
+                            Text(_noteTitle!,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold, fontSize: 13)),
+                          if (_noteTitle != null && _noteText != null)
+                            const SizedBox(height: 4),
+                          if (_noteText != null)
+                            Text(_noteText!,
+                                style: const TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Bewerken',
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      onPressed: _openNoteDialog,
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    IconButton(
+                      tooltip: 'Verwijderen',
+                      icon: const Icon(Icons.delete_outline, size: 18),
+                      onPressed: () =>
+                          setState(() { _noteTitle = null; _noteText = null; }),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Extra grafiek
+          if (_showExtraChart)
+            _ExtraCurrentChart(
+              rawData: rawData,
+              totalMinMs: totalMinMs,
+              totalMaxMs: totalMaxMs,
+              aEberle: aEberle,
+              onClose: () => setState(() => _showExtraChart = false),
+            ),
+        ],
+      ),
     );
   }
 }
@@ -486,14 +520,14 @@ class _ExtraCurrentChart extends StatefulWidget {
     required this.rawData,
     required this.totalMinMs,
     required this.totalMaxMs,
-    required this.hasMaxMin,
+    required this.aEberle,
     required this.onClose,
   });
 
   final List<MeasurementPoint> rawData;
   final double totalMinMs;
   final double totalMaxMs;
-  final bool hasMaxMin;
+  final bool aEberle;
   final VoidCallback onClose;
 
   @override
@@ -508,11 +542,6 @@ class _ExtraCurrentChartState extends State<_ExtraCurrentChart> {
   String? _title;
   String? _description;
 
-  static String _labelFor(_CurrentView v) => switch (v) {
-        _CurrentView.avg => 'gemiddeld',
-        _CurrentView.max => 'piek',
-        _CurrentView.min => 'minimum',
-      };
 
   Future<void> _openTitleDialog() async {
     final titleCtrl = TextEditingController(text: _title ?? '');
@@ -579,11 +608,13 @@ class _ExtraCurrentChartState extends State<_ExtraCurrentChart> {
       ('L3', Colors.blue),
       ('N',  Colors.grey),
     ];
-    const viewStyle = [
-      (_CurrentView.avg, '',     1.5, 1.0),
-      (_CurrentView.max, '_max', 2.0, 0.85),
-      (_CurrentView.min, '_min', 1.0, 0.5),
-    ];
+    final specs = _viewSpecs(widget.aEberle);
+    final available = {
+      for (final v in specs)
+        if (_hasSuffix(widget.rawData, v.suffix)) v.view
+    };
+    _activeViews.retainWhere((v) => specs.any((s) => s.view == v));
+    if (_activeViews.isEmpty) _activeViews.add(_CurrentView.avg);
 
     final fMin = _filterMinMs.clamp(widget.totalMinMs, widget.totalMaxMs);
     final fMax = _filterMaxMs.clamp(widget.totalMinMs, widget.totalMaxMs);
@@ -609,17 +640,18 @@ class _ExtraCurrentChartState extends State<_ExtraCurrentChart> {
 
     for (final (phase, baseColor) in phaseConfig) {
       if (!_visiblePhases.contains(phase)) continue;
-      for (final (view, suffix, width, opacity) in viewStyle) {
-        if (!_activeViews.contains(view)) continue;
-        final spots = spotsFor(phase, suffix);
+      for (final v in specs) {
+        if (!_activeViews.contains(v.view)) continue;
+        final spots = spotsFor(phase, v.suffix);
         if (spots.isEmpty) continue;
-        final color = baseColor.withValues(alpha: opacity);
-        seriesMeta.add((phase, view, color));
+        final color = baseColor.withValues(alpha: v.opacity);
+        seriesMeta.add((phase, v.view, color));
         lineBarsData.add(LineChartBarData(
           spots: spots,
           isCurved: false,
           color: color,
-          barWidth: width,
+          barWidth: v.width,
+          dashArray: v.dash,
           dotData: const FlDotData(show: false),
         ));
       }
@@ -690,7 +722,7 @@ class _ExtraCurrentChartState extends State<_ExtraCurrentChart> {
             final idx = s.barIndex.clamp(0, seriesMeta.length - 1);
             final (phase, view, color) = seriesMeta[idx];
             return LineTooltipItem(
-              '$phase ${_labelFor(view)}: ${s.y.toStringAsFixed(2)} A',
+              '$phase ${_labelFor(specs, view)}: ${s.y.toStringAsFixed(2)} A',
               TextStyle(color: color, fontSize: 11),
             );
           }).toList(),
@@ -699,7 +731,10 @@ class _ExtraCurrentChartState extends State<_ExtraCurrentChart> {
     );
 
     final chartTitle = _title ?? 'Grafiek 2';
-    final viewLabels = _activeViews.map(_labelFor).join(' + ');
+    final viewLabels = specs
+        .where((v) => _activeViews.contains(v.view))
+        .map((v) => v.label)
+        .join(' + ');
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -775,42 +810,11 @@ class _ExtraCurrentChartState extends State<_ExtraCurrentChart> {
                   }),
                 ),
               const SizedBox(width: 8),
-              FilterChip(
-                label: const Text('Gemiddeld'),
-                selected: _activeViews.contains(_CurrentView.avg),
-                onSelected: (on) => setState(() {
-                  if (on) {
-                    _activeViews.add(_CurrentView.avg);
-                  } else if (_activeViews.length > 1) {
-                    _activeViews.remove(_CurrentView.avg);
-                  }
-                }),
-              ),
-              FilterChip(
-                label: const Text('Piek'),
-                selected: _activeViews.contains(_CurrentView.max),
-                onSelected: widget.hasMaxMin
-                    ? (on) => setState(() {
-                          if (on) {
-                            _activeViews.add(_CurrentView.max);
-                          } else if (_activeViews.length > 1) {
-                            _activeViews.remove(_CurrentView.max);
-                          }
-                        })
-                    : null,
-              ),
-              FilterChip(
-                label: const Text('Minimum'),
-                selected: _activeViews.contains(_CurrentView.min),
-                onSelected: widget.hasMaxMin
-                    ? (on) => setState(() {
-                          if (on) {
-                            _activeViews.add(_CurrentView.min);
-                          } else if (_activeViews.length > 1) {
-                            _activeViews.remove(_CurrentView.min);
-                          }
-                        })
-                    : null,
+              ..._viewChips(
+                specs: specs,
+                active: _activeViews,
+                available: available,
+                setState: setState,
               ),
             ],
           ),
@@ -839,7 +843,7 @@ class _ExtraCurrentChartState extends State<_ExtraCurrentChart> {
             for (final (phase, view, color) in seriesMeta)
               LegendItem(
                 label: _activeViews.length > 1
-                    ? '$phase ${_labelFor(view)}'
+                    ? '$phase ${_labelFor(specs, view)}'
                     : phase,
                 color: color,
               ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import '../providers/measurement_provider.dart';
 
@@ -16,7 +17,14 @@ class OverviewScreen extends StatelessWidget {
 
     if (session == null) {
       return const Center(
-        child: Text('No data loaded. Open a PQF measurement folder to begin.'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('No data loaded. Open a PQF measurement folder to begin.'),
+            SizedBox(height: 8),
+            _AppVersionLabel(),
+          ],
+        ),
       );
     }
 
@@ -31,7 +39,14 @@ class OverviewScreen extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Recording Overview', style: theme.textTheme.headlineSmall),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text('Recording Overview', style: theme.textTheme.headlineSmall),
+              const Spacer(),
+              const _AppVersionLabel(),
+            ],
+          ),
           const SizedBox(height: 16),
           if (folderPath != null) ...[
             _PathCard(path: folderPath),
@@ -269,6 +284,27 @@ class _StatCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _AppVersionLabel extends StatelessWidget {
+  const _AppVersionLabel();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return FutureBuilder<PackageInfo>(
+      future: PackageInfo.fromPlatform(),
+      builder: (context, snapshot) {
+        final info = snapshot.data;
+        if (info == null) return const SizedBox.shrink();
+        return Text(
+          'v${info.version} (${info.buildNumber})',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        );
+      },
     );
   }
 }
